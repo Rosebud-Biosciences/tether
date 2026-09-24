@@ -72,6 +72,7 @@ def _state(branches: dict[str, Any], branch: str, version: int) -> State:
 class LanceBackend(ObjectBackend):
     kind = "lance"
     LOCAL_PATH_KEYS = ("uri",)
+    KEY_SUFFIXES = (".lance",)
     SAFE_CONFIG_KEYS = frozenset({"storage_options"})
     SAFE_OPTION_KEYS = MappingProxyType(
         {

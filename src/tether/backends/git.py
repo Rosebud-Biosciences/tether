@@ -57,6 +57,7 @@ absent ref as the all-zero object id)."""
 class GitBackend(ObjectBackend):
     kind = "git"
     LOCAL_PATH_KEYS = ("path", "uri")  # `uri` is the CLI's positional locator
+    KEY_SUFFIXES = (".git",)
     _LOCATOR_REFS = ("ref", "at", "remote")
     SAFE_CONFIG_KEYS = frozenset()  # git_path / jj_path: secrets.toml only
     # A change id is derived from the sha (and only present with jj); the same

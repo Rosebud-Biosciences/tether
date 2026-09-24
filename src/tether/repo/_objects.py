@@ -77,7 +77,7 @@ class ObjectOps(RepoCore):
     # -- add / remove ---------------------------------------------------------- #
     def add(
         self: Repo,
-        key: str,
+        key: str | None,
         kind: str,
         locator: dict,
         *,
@@ -91,7 +91,10 @@ class ObjectOps(RepoCore):
         `create`, which makes the store first.
 
         Args:
-            key: Free-form, path-like object key (`"zarr/imaging"`).
+            key: Free-form, path-like object key (`"zarr/imaging"`). `None`
+                takes it from the locator's path, for kinds whose locator is
+                one: its last segment, less the store's suffix
+                (`s3://lab/greetings.icechunk` is `greetings`).
             kind: Backend kind (see `tether.backends.known_kinds`).
             locator: Backend-specific fields naming the object (`uri`, `branch`,
                 `project_id`, ...); see the backends guide.
@@ -107,11 +110,14 @@ class ObjectOps(RepoCore):
             The new manifest.
 
         Raises:
-            ConfigError: If `key` exists, is unsafe, or `kind` cannot be built.
+            ConfigError: If `key` exists, is unsafe, or `kind` cannot be built;
+                or no key was given and none follows from the locator.
             CapabilityError: `create` for a kind without `CREATE`.
             BackendError: `create` where a store already exists.
         """
         with self._writer_lock():
+            if key is None:
+                key = self._key_from_locator(kind, locator)
             pre = {"objects": {key: None}, "workspace": self.workspace.to_toml()}
             if key in self.objects:
                 raise ConfigError(f"object already exists: {key}")
@@ -125,9 +131,24 @@ class ObjectOps(RepoCore):
 
             return create_store(self, key, kind, locator, policy=policy, pre=pre)
 
+    def _key_from_locator(self: Repo, kind: str, locator: dict) -> str:
+        backend = self.backend_for(kind)
+        resolved = absolutize_locator(backend, dict(locator), Path.cwd())
+        key = backend.default_key(resolved)
+        if key is None:
+            raise ConfigError(
+                f"a {kind} object needs a key: none follows from its locator"
+            )
+        if key in self.objects:
+            raise ConfigError(
+                f"object already exists: {key} (the key taken from the locator); "
+                "give this one a key of its own"
+            )
+        return key
+
     def create(
         self: Repo,
-        key: str,
+        key: str | None,
         kind: str,
         locator: dict,
         *,
@@ -143,7 +164,8 @@ class ObjectOps(RepoCore):
         forked at once, so the handle is writable without a `new`.
 
         Args:
-            key: Object key to register.
+            key: Object key to register; `None` takes it from the locator, as
+                in `add`.
             kind: Backend kind with the `CREATE` capability.
             locator: Where to make the store (backend-specific; nothing may
                 exist there yet).
@@ -154,8 +176,8 @@ class ObjectOps(RepoCore):
             CapabilityError: `kind` cannot create a store at this locator.
             BackendError: Something already exists at the locator.
         """
-        self.add(key, kind, locator, policy=policy, create=True)
-        return self.open(key)
+        manifest = self.add(key, kind, locator, policy=policy, create=True)
+        return self.open(manifest.key)
 
     def _add(
         self,

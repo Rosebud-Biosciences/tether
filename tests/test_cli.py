@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
@@ -1057,6 +1058,105 @@ def test_validate_locator_refuses_cheap_mistakes_at_add(vcs_root: Path) -> None:
     with pytest.raises(BackendError, match="ducklake `at` must be"):
         repo.add("l", "ducklake", {"metadata": str(vcs_root / "m.ducklake"), "at": "x"})
     assert repo.objects == {}
+
+
+@pytest.mark.parametrize(
+    ("kind", "locator", "key"),
+    [
+        ("icechunk", {"uri": "s3://lab/runs/greetings.icechunk"}, "greetings"),
+        ("icechunk", {"uri": "s3://lab/runs/greetings.icechunk/"}, "greetings"),
+        ("icechunk", {"uri": "/data/imaging.zarr"}, "imaging"),
+        ("icechunk", {"uri": "file:///data/imaging.ICECHUNK"}, "imaging"),
+        ("lance", {"uri": "s3://lab/emb.lance"}, "emb"),
+        ("delta", {"uri": "file:///data/log.delta/"}, "log"),
+        ("git", {"path": "/work/code.git"}, "code"),
+        ("git", {"uri": "/work/code"}, "code"),
+        ("file", {"uri": "s3://lab/raw/plate1.csv"}, "plate1.csv"),
+        ("file", {"uri": "s3://lab/raw/"}, "raw"),
+        ("file", {"uri": "s3://bucket"}, "bucket"),
+        ("file", {"uri": "/"}, None),
+        ("file", {}, None),
+        ("memory", {"system": "s"}, None),
+    ],
+)
+def test_default_key_is_the_locators_last_segment(
+    kind: str, locator: dict[str, str], key: str | None
+) -> None:
+    """Kinds whose locator is a path name an object after its last segment,
+    less the store's suffix; a data file keeps its extension. Other kinds, and
+    a path with no last segment, have no default."""
+    from tether.backends.base import build_backend
+
+    assert build_backend(kind).default_key(locator) == key
+
+
+def test_add_takes_the_key_from_a_lone_locator(
+    vcs_root: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One positional is the LOCATOR for a path-shaped kind and the KEY for any
+    other; two are KEY LOCATOR as before, and so is one positional with the
+    path given by `--set uri=` or `--set path=`. A derived key that is taken
+    is refused rather than guessed at."""
+    from tether.errors import ConfigError
+    from tether.repo import Repo
+
+    monkeypatch.chdir(vcs_root)
+    for d in ("raw/plate1", "other/plate1", "raw/plate2", "raw/plate3"):
+        (vcs_root / d).mkdir(parents=True)
+        (vcs_root / d / "a.txt").write_text(d)
+    assert runner.invoke(app, ["init"]).exit_code == 0
+
+    r = runner.invoke(app, ["add", "raw/plate1", "--kind", "file"])
+    assert r.exit_code == 0, r.output
+    assert "added plate1 (file, key from the locator)" in r.output
+    r = runner.invoke(app, ["add", "other/plate1", "--kind", "file"])
+    assert r.exit_code != 0
+    assert "plate1 (the key taken from the locator)" in r.output
+    r = runner.invoke(app, ["add", "second", "other/plate1", "--kind", "file"])
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(
+        app, ["add", "third", "--kind", "file", "--set", "uri=raw/plate2"]
+    )
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(
+        app, ["add", "fourth", "--kind", "file", "--set", "path=raw/plate3"]
+    )
+    assert r.exit_code == 0, r.output
+    code = tmp_path_factory.mktemp("code")
+    for argv in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "c"]):
+        subprocess.run(["git", *argv], cwd=code, check=True, capture_output=True)
+    r = runner.invoke(
+        app, ["add", "my/group", "--kind", "git", "--set", f"path={code}"]
+    )
+    assert r.exit_code == 0, r.output
+    system = f"sys-{uuid.uuid4().hex[:8]}"
+    default_store().system(system)
+    r = runner.invoke(
+        app, ["add", "db", "--kind", "memory", "--set", f"system={system}"]
+    )
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(app, ["add", "--kind", "file"])
+    assert r.exit_code != 0 and "needs a KEY, a LOCATOR, or both" in r.output
+
+    repo = Repo.find(vcs_root)
+    assert sorted(repo.objects) == [
+        "db",
+        "fourth",
+        "my/group",
+        "plate1",
+        "second",
+        "third",
+    ]
+    assert "uri" not in repo.objects["fourth"].locator
+    assert "uri" not in repo.objects["my/group"].locator
+    assert repo.objects["plate1"].locator["uri"] == str(
+        (vcs_root / "raw/plate1").resolve()
+    )
+    assert repo.add(None, "file", {"uri": "raw/plate2"}).key == "plate2"
+    with pytest.raises(ConfigError, match="a memory object needs a key"):
+        repo.add(None, "memory", {"system": system})
 
 
 @pytest.mark.parametrize(

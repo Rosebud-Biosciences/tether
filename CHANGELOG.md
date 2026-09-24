@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `tether add LOCATOR --kind KIND` (and `Repo.add(None, ...)`) takes the key
+  from the locator's last segment, less the store suffix, for file, icechunk,
+  lance, delta and git objects. Other kinds still need a key.
+
 ### Fixed
 
 - `file`, `delta` and `lance`: a region given in more than one place

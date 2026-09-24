@@ -52,6 +52,7 @@ from tether.manifest import (
 class IcechunkBackend(ObjectBackend):
     kind = "icechunk"
     LOCAL_PATH_KEYS = ("uri",)
+    KEY_SUFFIXES = (".icechunk", ".zarr")
     SAFE_CONFIG_KEYS = frozenset()  # credentials and endpoints: secrets.toml only
     capabilities = (
         Capability.FINGERPRINT

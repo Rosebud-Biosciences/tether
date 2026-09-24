@@ -14,7 +14,7 @@ in use: [Pinning](03-pinning.qmd),
 ```
 tether init [PATH]
 tether backends [--json]
-tether add KEY [LOCATOR] --kind KIND [--branch BRANCH] [--at STATE | --pick] [locator options] [--set k=v]... [--file immutable|versioned] [--pin native|record] [--create]
+tether add [KEY] [LOCATOR] --kind KIND [--branch BRANCH] [--at STATE | --pick] [locator options] [--set k=v]... [--file immutable|versioned] [--pin native|record] [--create]
 tether set KEY... | --all [--file immutable|versioned] [--pin native|record]
 tether remove KEY
 tether status [--snapshot | --no-snapshot]
@@ -186,6 +186,14 @@ unconditionally, with a warning.
 The positional `LOCATOR` becomes the `uri` field. Named options map to
 locator fields, and `--set key=value` (repeatable) covers the rest. Which
 fields each backend reads: [Backends](09-backends.qmd).
+
+`KEY` may be left out for kinds whose locator is a path: file, icechunk,
+lance, delta and git. The key is then the path's last segment, less the
+store suffix, so `tether add s3://lab/greetings.icechunk --kind icechunk`
+registers `greetings`. A data file keeps its extension. A lone positional is
+the `LOCATOR` for those kinds, unless `--set uri=` or `--set path=` gives the
+path, and the `KEY` for all others. A derived key
+that is already taken is refused; give that object a key of its own.
 
 | Option | Locator field | Typical backends |
 | --- | --- | --- |

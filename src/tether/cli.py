@@ -250,7 +250,11 @@ class _AddCommand(TyperCommand):
 
 @app.command(cls=_AddCommand)
 def add(
-    key: str = typer.Argument(..., help="Object key (may contain '/')."),
+    key: str | None = typer.Argument(
+        None,
+        help="Object key (may contain '/'). Omitted, it is the locator's last "
+        "segment less the store suffix (file, icechunk, lance, delta, git).",
+    ),
     locator: str | None = typer.Argument(None, help="Primary locator (uri / path)."),
     kind: str = typer.Option(
         ...,
@@ -312,12 +316,33 @@ def add(
     """Register an object in the working copy.
 
     The positional LOCATOR is stored as the `uri` field; named options set
-    other locator fields. The first commit pins the upstream branch head (or
-    --at / --pick: a chosen native state); after that the object keeps its pin
-    until `tether pull` or a working branch moves it. Nothing is contacted
-    until the next status/commit (except --pick, which lists history first).
+    other locator fields. For a kind whose locator is a path, a lone
+    positional is the LOCATOR and the key comes from it (`tether add
+    s3://lab/greetings.icechunk --kind icechunk` registers `greetings`), unless
+    `--set uri=` or `--set path=` gives the path; for any other kind it is the
+    KEY. The first commit pins the upstream branch
+    head (or --at / --pick: a chosen native state); after that the object
+    keeps its pin until `tether pull` or a working branch moves it. Nothing is
+    contacted until the next status/commit (except --pick, which lists history
+    first).
     """
     repo = _repo()
+    if key is None:
+        _fail(TetherError("add needs a KEY, a LOCATOR, or both"))
+    if locator is None:
+        try:
+            backend = repo.backend_for(kind)
+        except TetherError as exc:
+            _fail(exc)
+        # A path already given as a field (`--set path=`) leaves the lone
+        # positional to be the key.
+        named = {item.partition("=")[0] for item in set_}
+        if backend.KEY_SUFFIXES is not None and not named & {
+            "uri",
+            "path",
+            *backend.LOCAL_PATH_KEYS,
+        }:
+            key, locator = None, key
     loc = _build_locator(
         locator,
         set_,
@@ -342,12 +367,13 @@ def add(
         loc["at"] = chosen.id
     try:
         policy = Policy.from_dict({"file": file, "pin": pin})
-        repo.add(key, kind, loc, policy=policy, create=create)
+        manifest = repo.add(key, kind, loc, policy=policy, create=create)
     except TetherError as exc:
         _fail(exc)
     suffix = f" at {loc['at']}" if "at" in loc else ""
     made = ", created" if create else ""
-    typer.echo(f"added {key} ({kind}{made}){suffix}")
+    derived = ", key from the locator" if key is None else ""
+    typer.echo(f"added {manifest.key} ({kind}{made}{derived}){suffix}")
     if create:
         _experimental_note(
             "the store lifecycle (`--create`, `gc --delete-stores`) is experimental: "

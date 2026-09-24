@@ -392,6 +392,7 @@ def _link_token(target: str) -> str:
 class FileBackend(ObjectBackend):
     kind = "file"
     LOCAL_PATH_KEYS = ("uri", "path")
+    KEY_SUFFIXES = ()
     SAFE_CONFIG_KEYS = frozenset({"storage_options"})
     SAFE_OPTION_KEYS = MappingProxyType(
         {

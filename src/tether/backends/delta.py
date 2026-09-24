@@ -45,6 +45,7 @@ from tether.manifest import Locator, Pin, State
 class DeltaBackend(ObjectBackend):
     kind = "delta"
     LOCAL_PATH_KEYS = ("uri",)
+    KEY_SUFFIXES = (".delta",)
     SAFE_CONFIG_KEYS = frozenset({"storage_options"})
     SAFE_OPTION_KEYS = MappingProxyType(
         {

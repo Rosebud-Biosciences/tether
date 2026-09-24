@@ -291,6 +291,22 @@ class ObjectBackend(Protocol):
         """
         return dict(locator)
 
+    KEY_SUFFIXES: tuple[str, ...] | None = None
+    """For a kind whose positional locator (`uri`) is a path or URI: the store
+    suffixes :meth:`default_key` drops from its last segment (`.icechunk` in
+    `greetings.icechunk`); `()` drops none. `None`: the locator is not a
+    path, and an object of this kind is always registered with a key."""
+
+    def default_key(self, locator: Locator) -> str | None:
+        """The key `add` gives an object registered without one: the last
+        segment of the locator's `uri` (or `path`), less one of
+        :attr:`KEY_SUFFIXES`. `None` when this kind names no path or no valid
+        key comes out."""
+        if self.KEY_SUFFIXES is None:
+            return None
+        uri = locator.get("uri") or locator.get("path")
+        return key_from_path(str(uri), self.KEY_SUFFIXES) if uri else None
+
     LOCAL_PATH_KEYS: tuple[str, ...] = ()
     """Locator keys whose value may be a local filesystem path. The engine
     turns a relative one into an absolute path when the object is registered
@@ -1139,6 +1155,29 @@ def canonical_uri(uri: str) -> str:
     be one object to pin ids, listings and `gc`), any other URL as written."""
     path = local_path(uri)
     return uri if path is None else path
+
+
+def key_from_path(uri: str, suffixes: Collection[str] = ()) -> str | None:
+    """The last segment of a local path or URL (`s3://lab/runs/greetings.icechunk/`
+    is `greetings` with suffix `.icechunk`), less the first of `suffixes` it
+    ends with, when that is a valid object key; else `None`."""
+    from tether.errors import ConfigError
+    from tether.manifest import validate_key
+
+    path = local_path(uri)
+    if path is None:
+        _scheme, sep, rest = uri.partition("://")
+        path = rest if sep else ""
+    name = path.rstrip("/").rsplit("/", 1)[-1]
+    for suffix in suffixes:
+        if name.lower().endswith(suffix) and len(name) > len(suffix):
+            name = name[: -len(suffix)]
+            break
+    try:
+        validate_key(name)
+    except ConfigError:
+        return None
+    return name
 
 
 def absolutize_locator(backend: ObjectBackend, locator: Locator, base: Path) -> Locator:
