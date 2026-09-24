@@ -105,6 +105,40 @@ def test_hash_cache_distrusts_entries_hashed_near_a_change(tmp_path: Path) -> No
     assert cache.lookup(f, st) == "hash-of-old"
 
 
+@pytest.mark.parametrize("committed", [None, "region", "AWS_REGION", "aws_region"])
+@pytest.mark.parametrize("on_locator", [False, True])
+@pytest.mark.parametrize("in_secrets", [False, True])
+def test_a_region_given_several_ways_reaches_obstore_once(
+    committed: str | None,
+    on_locator: bool,
+    in_secrets: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A region can come from committed `storage_options` (in any spelling),
+    the locator and `secrets.toml`. obstore refuses one setting given twice,
+    so exactly one reaches it: `secrets.toml`'s, else the locator's, else the
+    committed one."""
+    for name in ("AWS_REGION", "AWS_DEFAULT_REGION"):
+        monkeypatch.delenv(name, raising=False)
+    b = FileBackend({"storage_options": {committed: "us-east-1"}} if committed else {})
+    locator: dict[str, str] = {"uri": "s3://bucket/data/"}
+    if on_locator:
+        locator["region"] = "us-west-2"
+    if in_secrets:
+        b.configure_secrets({}, {"s3://bucket/": {"region": "eu-west-1"}})
+    store = b._open_store("s3://bucket", locator)
+    expected = (
+        "eu-west-1"
+        if in_secrets
+        else "us-west-2"
+        if on_locator
+        else "us-east-1"
+        if committed
+        else None
+    )
+    assert store.config.get("region") == expected
+
+
 def test_open_store_passes_client_options_apart(tmp_path: Path) -> None:
     """obstore takes `allow_http` in `client_options`; as a store config key it
     panics (a BaseException that escapes error wrapping)."""

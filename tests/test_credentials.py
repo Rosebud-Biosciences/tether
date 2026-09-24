@@ -11,7 +11,7 @@ from typing import Any, cast
 import pytest
 
 from tether import credentials
-from tether.credentials import REFRESH_MARGIN, aws_credentials
+from tether.credentials import REFRESH_MARGIN, aws_credentials, merged_storage_options
 
 NOW = 1_700_000_000.0
 HOUR = 3600.0
@@ -213,3 +213,44 @@ def test_epoch_accepts_what_boto3_and_botocore_hand_out() -> None:
     assert _epoch(datetime.fromtimestamp(NOW, UTC).replace(tzinfo=None)) == NOW
     assert _epoch("2023-11-14T22:13:20Z") == NOW
     assert _epoch(NOW) == NOW
+
+
+@pytest.mark.parametrize(
+    "committed", [{}, {"region": "c"}, {"AWS_REGION": "c"}, {"aws_default_region": "c"}]
+)
+@pytest.mark.parametrize("locator", [{}, {"region": "l"}])
+@pytest.mark.parametrize("secrets", [{}, {"region": "s"}])
+def test_merged_storage_options_carry_one_region(
+    committed: dict[str, str], locator: dict[str, str], secrets: dict[str, str]
+) -> None:
+    """The layers file, delta, lance and icechunk's prefix store build their
+    options from: the region appears at most once, whichever layers and
+    spellings supply it, and the most specific layer wins."""
+    options = merged_storage_options(committed, locator, secrets)
+    regions = [k for k in options if k.lower().endswith("region")]
+    want = (
+        secrets.get("region")
+        or locator.get("region")
+        or next(iter(committed.values()), None)
+    )
+    assert regions == (["AWS_REGION"] if want else [])
+    assert options.get("AWS_REGION") == want
+
+
+def test_merged_storage_options_keep_other_committed_keys() -> None:
+    options = merged_storage_options(
+        {"conditional_put": "etag", "region": "c"},
+        {},
+        {
+            "access_key_id": "AKIA",
+            "secret_access_key": "sk",
+            "endpoint_url": "http://x",
+        },
+    )
+    assert options == {
+        "conditional_put": "etag",
+        "AWS_ACCESS_KEY_ID": "AKIA",
+        "AWS_SECRET_ACCESS_KEY": "sk",
+        "AWS_ENDPOINT_URL": "http://x",
+        "AWS_REGION": "c",
+    }

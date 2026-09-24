@@ -509,14 +509,14 @@ class FileBackend(ObjectBackend):
         """
         from obstore.store import from_url
 
-        from tether.credentials import storage_options
+        from tether.credentials import merged_storage_options
 
-        options: dict[str, Any] = dict(self._config.get("storage_options") or {})
-        region = locator.get("region")
-        if region:
-            options["region"] = str(region)
         # Per-object credentials from secrets.toml, resolved to static keys.
-        options.update(storage_options(self.secrets_for(locator)))
+        options = merged_storage_options(
+            self._config.get("storage_options") or {},
+            locator,
+            self.secrets_for(locator),
+        )
         # HTTP client settings are a separate argument, however they are
         # spelled; as store config keys obstore panics (a BaseException,
         # past `wrap_library_errors`).

@@ -216,3 +216,30 @@ def storage_options(options: Mapping[str, Any]) -> dict[str, str]:
     if options.get("region"):
         out["AWS_REGION"] = str(options["region"])
     return out
+
+
+_REGION_KEYS = frozenset(
+    {"region", "aws_region", "default_region", "aws_default_region"}
+)
+
+
+def merged_storage_options(
+    committed: Mapping[str, Any], locator: Mapping[str, Any], secrets: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Committed `storage_options`, the locator's `region`, and the object's
+    `secrets.toml` entry as one options dict, later layers winning.
+
+    obstore refuses a setting given twice under two of its spellings
+    (`region` and `AWS_REGION`), so the region appears once, as `AWS_REGION`:
+    the secrets entry's, else the locator's, else the committed one.
+    """
+    options = dict(committed)
+    region = None
+    for key in list(options):
+        if str(key).lower() in _REGION_KEYS:
+            region = options.pop(key)
+    region = secrets.get("region") or locator.get("region") or region
+    options.update(storage_options({k: v for k, v in secrets.items() if k != "region"}))
+    if region:
+        options["AWS_REGION"] = str(region)
+    return options

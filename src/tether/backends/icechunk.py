@@ -592,10 +592,10 @@ class IcechunkBackend(ObjectBackend):
         credentials and the server switches `_storage` passes Icechunk."""
         from obstore.store import from_url
 
-        from tether.credentials import storage_options
+        from tether.credentials import merged_storage_options
 
         secrets = self.secrets_for(locator)
-        options: dict[str, Any] = dict(storage_options(secrets))
+        options = merged_storage_options({}, locator, secrets)
         flags = self._s3_flags(secrets)
         if flags.get("allow_http"):
             options["client_options"] = {"allow_http": True}

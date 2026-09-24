@@ -91,13 +91,13 @@ class DeltaBackend(ObjectBackend):
         return str(uri)
 
     def _storage_options(self, locator: Locator) -> dict[str, str] | None:
-        from tether.credentials import storage_options
+        from tether.credentials import merged_storage_options
 
-        options = dict(self._config.get("storage_options") or {})
-        region = locator.get("region")
-        if region:
-            options.setdefault("AWS_REGION", str(region))
-        options.update(storage_options(self.secrets_for(locator)))
+        options = merged_storage_options(
+            self._config.get("storage_options") or {},
+            locator,
+            self.secrets_for(locator),
+        )
         return {str(k): str(v) for k, v in options.items()} or None
 
     def _table(

@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `file`, `delta` and `lance`: a region given in more than one place
+  (`secrets.toml`, the locator, `storage_options` under any spelling) reaches
+  the store once, the most specific winning; obstore refused it as a
+  duplicate. Icechunk's store checks also honour a locator region.
+
 ## [0.1.0b4] - 2026-09-23
 
 ### Security

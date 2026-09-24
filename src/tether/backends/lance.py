@@ -125,10 +125,13 @@ class LanceBackend(ObjectBackend):
         """Open the dataset at its main head (never cached: heads move)."""
         import lance
 
-        from tether.credentials import storage_options
+        from tether.credentials import merged_storage_options
 
-        options = dict(self._config.get("storage_options") or {})
-        options.update(storage_options(self.secrets_for(locator)))
+        options = merged_storage_options(
+            self._config.get("storage_options") or {},
+            locator,
+            self.secrets_for(locator),
+        )
         try:
             return lance.dataset(self._uri(locator), storage_options=options or None)
         except _LANCE_ERRORS as exc:
