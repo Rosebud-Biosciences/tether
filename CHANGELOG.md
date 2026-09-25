@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0b5] - 2026-09-25
+
 ### Added
 
 - `tether add LOCATOR --kind KIND` (and `Repo.add(None, ...)`) takes the key
@@ -15,6 +17,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `--key`: an exact key or a prefix ending in `/` (`zarr/`). Only those
   objects are contacted and reported. In Python it is `keys=` on each
   method, and `Repo.select_keys`, which `promote` and `restore` now use too.
+  `Repo.restore([])` is refused rather than resetting every object;
+  `keys=None` asks for all of them.
 - `commit KEY...` and `pull --key KEY` commit only those objects, as `git
   commit PATH` does. Other manifests and uncommitted `.tether/` edits stay
   out of the commit, and objects sharing a branch space are named together.
@@ -32,6 +36,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`secrets.toml`, the locator, `storage_options` under any spelling) reaches
   the store once, the most specific winning; obstore refused it as a
   duplicate. Icechunk's store checks also honour a locator region.
+- Object keys with spaces, parentheses or `[` reach jj and git quoted: jj
+  rejected such a path as a revset, and git read `[ab]` as a pattern that
+  could sweep another object's manifest into a commit.
 
 ## [0.1.0b4] - 2026-09-23
 
@@ -830,7 +837,8 @@ without a pre-release marker and has been removed; its code is this release.
   once, concurrently (~280x faster on a 200-commit repo); local directory
   fingerprints are ~7x cheaper per file.
 
-[Unreleased]: https://github.com/elyall/tether/compare/v0.1.0b4...HEAD
+[Unreleased]: https://github.com/elyall/tether/compare/v0.1.0b5...HEAD
+[0.1.0b5]: https://github.com/elyall/tether/compare/v0.1.0b4...v0.1.0b5
 [0.1.0b4]: https://github.com/elyall/tether/compare/v0.1.0b3...v0.1.0b4
 [0.1.0b3]: https://github.com/elyall/tether/compare/v0.1.0b2...v0.1.0b3
 [0.1.0b2]: https://github.com/elyall/tether/compare/v0.1.0b1...v0.1.0b2
