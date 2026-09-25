@@ -72,6 +72,7 @@ class ForkOps(RepoCore):
         keep: bool = False,
         eager: bool | None = None,
         discard: bool = False,
+        adopt: bool = False,
     ) -> Plan:
         """Compute what `new` would do without writing anywhere.
 
@@ -107,12 +108,34 @@ class ForkOps(RepoCore):
         instead and `apply_new` raises, unless `discard` is set. Committing
         first pins the writes; `discard` throws them away on purpose.
 
+        With `adopt`, an object whose store already has this dataset's
+        branch for the bookmark (`tether.ws.<dataset>.<bookmark>`, or its
+        highest `.<n>` generation where a store made siblings) takes that
+        branch as its working ref as it is (`adopt`): no reset, no copy,
+        whatever its head -- the branches of a dataset whose repository was
+        lost, found by `recover_report`. The plan binds to each adopted head
+        (`ref_head`). Objects without such a branch fork as usual. Refused
+        on the trunk bookmark, whose working refs are the upstream branches.
+
         Args:
             rev: Revision whose manifests to fork from (`None`: working tree).
             keep: Only refresh the baseline; keep working refs.
             eager: Fork every object during `new`; default from `config.new_fork`.
             discard: Reset working branches even if they hold unpinned writes.
+            adopt: Take the bookmark's existing store branches as they are.
+
+        Raises:
+            ConfigError: `adopt` with `keep` or `discard`.
         """
+        if adopt and (keep or discard):
+            raise ConfigError(
+                "--adopt takes the bookmark's branches as they are; "
+                + (
+                    "--keep keeps this workspace's working refs instead"
+                    if keep
+                    else "--discard would reset them"
+                )
+            )
         objects = self._objects_at(self.vcs.resolve(rev)) if rev else self.objects
         eager = (self.config.new_fork == "eager") if eager is None else eager
         known = self.vcs.bookmarks()
@@ -155,6 +178,24 @@ class ForkOps(RepoCore):
                 "workspace_id": self.workspace.workspace_id,
             },
         )
+        if adopt:
+            plan.context["adopt"] = True
+            if bookmark is None or bookmark == self.config.trunk:
+                plan.actions.append(
+                    Action(
+                        "refuse",
+                        detail=(
+                            f"--adopt takes a bookmark's own store branches; the "
+                            f"trunk {bookmark!r} has none -- its working refs are "
+                            "the upstream branches themselves"
+                            if bookmark
+                            else "--adopt needs a bookmark: `tether new -b NAME "
+                            "--adopt`, or `tether new NAME --adopt` to join one"
+                        ),
+                        params={"bookmark": bookmark},
+                    )
+                )
+                return self._with_new_preconditions(plan)
         if keep:
             plan.notes.append("keep: refresh the baseline only; working refs unchanged")
             return self._with_new_preconditions(plan)
@@ -208,7 +249,13 @@ class ForkOps(RepoCore):
                 continue
             if m.state is None:
                 plan.notes.append(
-                    f"{key}: nothing committed yet; fork after first commit"
+                    f"{key}: nothing committed yet; "
+                    + (
+                        f"commit it on the trunk ({self.config.trunk}) first, "
+                        "then adopt"
+                        if adopt
+                        else "fork after first commit"
+                    )
                 )
                 continue
             name = working_ref_name(self.config.dataset_id, bookmark)
@@ -246,13 +293,22 @@ class ForkOps(RepoCore):
                             "share",
                             key,
                             m.kind,
-                            target=name,
+                            target=(
+                                first_action.target
+                                if first_action.op == "adopt"
+                                else name
+                            ),
                             detail=f"same branch as {first_key} ({first_action.op})",
                             params={"with": first_key, "state": m.state},
                         )
                     )
                 continue
             scoped[scope] = key
+            if adopt:
+                taken = self._plan_adopt(key, m, bookmark)
+                if taken is not None:
+                    plan.actions.append(taken)
+                    continue
             # The bookmark's branch may already exist in this system -- joining
             # a bookmark, or `new` again on the one we are on. Its head decides
             # whether it is kept, reset (recorded so the op log can restore it),
@@ -348,12 +404,12 @@ class ForkOps(RepoCore):
                 )
                 if unpinned and not discard:
                     assert head is not None
-                    adopt = self._adopt_or_refuse(
+                    verdict = self._adopt_or_refuse(
                         key, m, existing, head, bookmark, shared=shared
                     )
-                    if adopt.op == "refuse":
-                        adopt.params = params
-                    plan.actions.append(adopt)
+                    if verdict.op == "refuse":
+                        verdict.params = params
+                    plan.actions.append(verdict)
                     continue
                 if unpinned:
                     detail += f", discarding its writes ({short_state(head)})"
@@ -377,6 +433,74 @@ class ForkOps(RepoCore):
                     )
                 )
         return self._with_new_preconditions(plan)
+
+    def _plan_adopt(self, key: str, m: ObjectManifest, bookmark: str) -> Action | None:
+        """What `new --adopt` does with `key`: this dataset's branch for
+        `bookmark` in its store, taken as it is (`adopt`) -- the highest
+        generation where the store made siblings -- or a refusal when the
+        store cannot say; `None` when it has no such branch."""
+        backend = self.backend_for(m.kind)
+        slug = _m.bookmark_slug(bookmark)
+        try:
+            found = [
+                ref
+                for ref in backend.list_working_refs(m.locator)
+                if _m.working_ref_dataset(ref) == self.config.dataset_id
+                and _m.working_ref_bookmark(ref) == slug
+            ]
+        except TetherError as exc:
+            return Action(
+                "refuse",
+                key,
+                m.kind,
+                target=working_ref_name(self.config.dataset_id, bookmark),
+                detail=f"could not list branches ({exc}); whether {bookmark}'s "
+                "branch exists is unknown, so there is nothing to adopt or fork",
+            )
+        if not found:
+            return None
+        found.sort(key=lambda ref: _m.working_ref_generation(ref) or 1)
+        ref = found[-1]
+        try:
+            head = backend.fingerprint(m.locator, ref)
+        except TetherError as exc:
+            return Action(
+                "refuse",
+                key,
+                m.kind,
+                target=ref,
+                detail=f"{ref} exists but its head could not be read ({exc}); "
+                "it is not adopted blind",
+            )
+        generation = _m.working_ref_generation(ref)
+        which = (
+            f"as it is: generation {generation or 1}, the highest of {len(found)}"
+            if len(found) > 1
+            else "as it is"
+        )
+        what = (
+            "the pin"
+            if self._same(m.kind, head, m.state)
+            else "writes no commit here pins; the next commit pins them"
+        )
+        return Action(
+            "adopt",
+            key,
+            m.kind,
+            target=ref,
+            detail=f"adopted {which}; at {short_state(head)}, {what}",
+            params={
+                "head": head,
+                "fork_point": (
+                    self.workspace.fork_points.get(key)
+                    if self.workspace.working_refs.get(key) == ref
+                    else None
+                )
+                or m.state,
+                "adopted": True,
+                "generation": generation,
+            },
+        )
 
     def _whose_writes(self, key: str, branch: str, bookmark: str) -> tuple[bool, str]:
         """Whether writes on `branch` no commit pins can only be this
@@ -729,6 +853,11 @@ class ForkOps(RepoCore):
                     "created": sorted(k for k in forked if k not in reset),
                     "reset": sorted(reset),
                     "reused": sorted(reused),
+                    "adopted": {
+                        a.key: a.target
+                        for a in plan.actions
+                        if a.op == "adopt" and a.params.get("adopted")
+                    },
                     "working_refs": dict(working_refs),
                     "pending_forks": dict(pending),
                     "failed": sorted(errors),
@@ -968,6 +1097,7 @@ class ForkOps(RepoCore):
         keep: bool = False,
         eager: bool | None = None,
         discard: bool = False,
+        adopt: bool = False,
     ) -> None:
         """Start working on a bookmark: set up writable refs off its pins.
 
@@ -990,10 +1120,12 @@ class ForkOps(RepoCore):
             eager: Create every branch now; default `config.new_fork == "eager"`.
             discard: Reset working branches that hold unpinned writes (see
                 `plan_new`); without it such a `new` is refused.
+            adopt: Take the bookmark's existing store branches as they are,
+                whatever they hold (see `plan_new`).
 
         Raises:
             TetherError: A working branch holds unpinned writes and `discard`
-                is not set.
+                is not set, or `adopt` on the trunk.
             MultiObjectError: A pin is missing or a fork failed.
         """
         # Plan and apply under one lock: planning sees the state the lock
@@ -1007,6 +1139,7 @@ class ForkOps(RepoCore):
                     keep=keep,
                     eager=eager,
                     discard=discard,
+                    adopt=adopt,
                 ),
             )
 

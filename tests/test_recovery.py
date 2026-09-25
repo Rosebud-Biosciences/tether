@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,23 @@ def _mem(repo: Repo, key: str = "db", system: str | None = None) -> str:
     default_store().system(name)
     repo.add(key, "memory", {"system": name, "branch": "main"})
     return name
+
+
+def _recovered(
+    repo: Repo, tmp: pytest.TempPathFactory, *, dataset_id: str | None = None
+) -> Repo:
+    """`repo`'s repository lost: a fresh one of the same VCS elsewhere, with
+    the dataset initialized under `dataset_id` (default: `repo`'s) and the
+    same objects registered."""
+    root = tmp.mktemp("recovered")
+    if repo.vcs.kind == "git":
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+    else:
+        subprocess.run(["jj", "git", "init"], cwd=root, check=True, capture_output=True)
+    fresh = Repo.init(root, dataset_id=dataset_id or repo.config.dataset_id)
+    for key, m in sorted(repo.objects.items()):
+        fresh.add(key, m.kind, dict(m.locator))
+    return fresh
 
 
 def _state(repo: Repo, key: str) -> str:
@@ -399,3 +417,214 @@ def test_cli_restore_at(
     r = runner.invoke(app, ["restore", "db", "--at", "release-1"])
     assert r.exit_code == 0, r.output
     assert f"db -> {wref}  (from release-1; release-1 is untouched)" in r.stdout
+
+
+# --------------------------------------------------------------------------- #
+# new --adopt
+# --------------------------------------------------------------------------- #
+def _lost_bookmark(vcs_root: Path) -> tuple[Repo, str, str]:
+    """A dataset with bookmark `feat` whose branch holds a committed write
+    and an uncommitted one on top: (repo, system, head)."""
+    repo = Repo.init(vcs_root)
+    system = _mem(repo)
+    store = default_store()
+    store.write(system, "main", {"v": 1})
+    repo.commit("baseline")
+    repo.new(bookmark="feat", eager=True)
+    wref = repo.workspace.working_refs["db"]
+    store.write(system, wref, {"v": 2})
+    repo.commit("feat: v2")
+    return repo, system, store.write(system, wref, {"v": 3})
+
+
+def test_new_adopt_takes_a_branch_with_uncommitted_writes_as_it_is(
+    vcs_root: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    lost, system, head = _lost_bookmark(vcs_root)
+    store = default_store()
+    wref = lost.workspace.working_refs["db"]
+    repo = _recovered(lost, tmp_path_factory)
+    repo.commit("recover the trunk")
+
+    # Without --adopt the branch is somebody's unpinned writes: refused.
+    (refused,) = repo.plan_new(bookmark="feat").actions
+    assert refused.op == "refuse" and "has writes since" in refused.detail
+    with pytest.raises(TetherError, match="unpinned writes"):
+        repo.new(bookmark="feat")
+    assert store.system(system).branches[wref] == head
+    with pytest.raises(ConfigError, match="--discard would reset them"):
+        repo.plan_new(bookmark="feat", adopt=True, discard=True)
+    with pytest.raises(ConfigError, match="--keep keeps"):
+        repo.plan_new(adopt=True, keep=True)
+
+    plan = repo.plan_new(bookmark="feat", adopt=True)
+    (taken,) = plan.actions
+    assert taken.op == "adopt" and taken.target == wref
+    assert taken.params["head"] == {"snapshot_id": head}
+    assert taken.params["generation"] is None
+    assert "adopted as it is" in taken.detail and "next commit pins" in taken.detail
+    (bound,) = [p for p in plan.preconditions if p.key == "db"]
+    assert bound.kind == "ref_head" and bound.expected == {"snapshot_id": head}
+    assert plan.is_empty  # nothing is written to the store
+    repo.apply_new(plan)
+
+    assert store.system(system).branches[wref] == head  # no reset, no copy
+    assert repo.workspace.bookmark == "feat"
+    assert repo.workspace.working_refs["db"] == wref
+    assert repo.workspace.fork_points["db"] == repo.objects["db"].state
+    assert not repo.is_stale()
+    assert repo.ops()[0].summary().startswith("adopted db")
+    assert _state(repo, "db") == "modified"
+    res = repo.commit("feat: recovered")
+    pin = res.pinned["db"]
+    assert pin is not None and pin.created
+    assert repo.objects["db"].state == {"snapshot_id": head}
+    assert _state(repo, "db") == "clean"
+
+
+def test_new_adopt_takes_the_highest_generation_and_forks_the_rest(
+    vcs_root: Path,
+) -> None:
+    repo = Repo.init(vcs_root)
+    system = _mem(repo)
+    fresh = _mem(repo, "fresh")
+    store = default_store()
+    repo.commit("baseline")
+    ds = repo.config.dataset_id
+    sys = store.system(system)
+    base = sys.branches["main"]
+    gens = {
+        f"tether.ws.{ds}.feat": store.write(system, "g1", {"g": 1}),
+        f"tether.ws.{ds}.feat.3": store.write(system, "g3", {"g": 3}),
+        f"tether.ws.{ds}.feat.2": store.write(system, "g2", {"g": 2}),
+    }
+    for name, sid in gens.items():
+        sys.branches[name] = sid
+    # Not this bookmark's, or not this dataset's: never adopted.
+    sys.branches[f"tether.ws.{ds}.feature"] = base
+    sys.branches[f"tether.ws.{'f' * 8}.feat.9"] = base
+    before = dict(sys.branches)
+
+    plan = repo.plan_new(bookmark="feat", adopt=True, eager=True)
+    ops = {a.key: a for a in plan.actions}
+    assert ops["db"].op == "adopt" and ops["db"].target == f"tether.ws.{ds}.feat.3"
+    assert ops["db"].params["generation"] == 3
+    assert "generation 3, the highest of 3" in ops["db"].detail
+    # An object whose store has no such branch forks as `new` always does.
+    assert ops["fresh"].op == "fork" and ops["fresh"].target == f"tether.ws.{ds}.feat"
+    assert {(p.key, p.kind) for p in plan.preconditions if p.key} == {
+        ("db", "ref_head"),
+        ("fresh", "ref_absent"),
+    }
+    repo.apply_new(plan)
+    assert repo.workspace.working_refs == {
+        "db": f"tether.ws.{ds}.feat.3",
+        "fresh": f"tether.ws.{ds}.feat",
+    }
+    assert store.system(system).branches == before
+    assert (
+        store.system(fresh).branches[f"tether.ws.{ds}.feat"]
+        == (store.system(fresh).branches["main"])
+    )
+    # Undo takes back the fork it made and leaves the adopted branch alone.
+    report = repo.undo()
+    assert report.op.command == "new"
+    assert f"tether.ws.{ds}.feat" not in store.system(fresh).branches
+    assert store.system(system).branches == before
+
+    # Lazily, the object without a branch defers its fork.
+    repo.new("main")
+    plan = repo.plan_new(bookmark="feat2", adopt=True)
+    assert {a.key: a.op for a in plan.actions} == {
+        "db": "defer-fork",
+        "fresh": "defer-fork",
+    }
+
+
+def test_new_adopt_plan_goes_stale_when_the_adopted_head_moves(
+    vcs_root: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    lost, system, head = _lost_bookmark(vcs_root)
+    store = default_store()
+    wref = lost.workspace.working_refs["db"]
+    repo = _recovered(lost, tmp_path_factory)
+    repo.commit("recover the trunk")
+    saved = repo.plan_new(bookmark="feat", adopt=True).to_json()
+    assert json.loads(saved)["context"]["adopt"] is True
+
+    moved = store.write(system, wref, {"v": 4})  # the lost checkout writes on
+    with pytest.raises(StalePlanError, match="moved since the plan was made"):
+        repo.apply_new(Plan.from_json(saved))
+    assert repo.workspace.bookmark == "main" and "feat" not in repo.vcs.bookmarks()
+    assert store.system(system).branches[wref] == moved != head
+    data = json.loads(saved)
+    data["actions"][0]["params"]["head"] = {"snapshot_id": moved}
+    with pytest.raises(StalePlanError, match="edited after it was saved"):
+        repo.apply_new(Plan.from_dict(data))
+    repo.new(bookmark="feat", adopt=True)
+    assert repo.workspace.working_refs["db"] == wref
+    assert store.system(system).branches[wref] == moved
+
+
+def test_new_adopt_refusals(vcs_root: Path, tmp_path: Path) -> None:
+    repo = Repo.init(vcs_root)
+    system = _mem(repo)
+    repo.commit("baseline")
+    ds = repo.config.dataset_id
+    default_store().system(system).branches[f"tether.ws.{ds}.main"] = "x"
+
+    # The trunk: its working refs are the upstream branches.
+    for plan in (repo.plan_new("main", adopt=True), repo.plan_new(adopt=True)):
+        (refused,) = plan.actions
+        assert refused.op == "refuse" and not refused.key
+        assert "the trunk 'main' has none" in refused.detail
+    with pytest.raises(TetherError, match="own store branches"):
+        repo.new(adopt=True)
+    assert repo.workspace.bookmark == "main"
+
+    # Another live checkout holding the bookmark.
+    repo.new(bookmark="feat")
+    other = tmp_path / "peer"
+    if repo.vcs.kind == "jj":
+        subprocess.run(
+            ["jj", "workspace", "add", str(other)],
+            cwd=vcs_root,
+            check=True,
+            capture_output=True,
+        )
+    else:
+        subprocess.run(
+            ["git", "worktree", "add", "--detach", str(other)],
+            cwd=vcs_root,
+            check=True,
+            capture_output=True,
+        )
+    peer = Repo.find(other)
+    (refused,) = peer.plan_new("feat", adopt=True).actions
+    assert refused.op == "refuse" and "held by live workspace" in refused.detail
+
+
+def test_cli_new_adopt(
+    vcs_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    lost, _system, _head = _lost_bookmark(vcs_root)
+    wref = lost.workspace.working_refs["db"]
+    repo = _recovered(lost, tmp_path_factory)
+    repo.commit("recover the trunk")
+    monkeypatch.chdir(repo.root)
+    r = runner.invoke(app, ["new", "--adopt"])
+    assert r.exit_code == 1 and "own store branches" in r.stderr, r.output
+    r = runner.invoke(app, ["new", "-b", "feat", "--adopt", "--dry-run"])
+    assert r.exit_code == 0, r.output
+    assert "adopt" in r.stdout and wref in r.stdout
+    r = runner.invoke(app, ["new", "-b", "feat", "main", "--adopt", "--json"])
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.stdout)
+    assert payload["adopted"] == {"db": wref}
+    assert payload["working_refs"] == {"db": wref}
+    runner.invoke(app, ["new", "main"])
+    r = runner.invoke(app, ["new", "feat", "--adopt"])
+    assert r.exit_code == 0, r.output
+    assert f"db -> {wref}  (adopted as it is; at snapshot_id=" in r.stdout

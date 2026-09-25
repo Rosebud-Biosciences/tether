@@ -917,6 +917,15 @@ def new(
         help="Reset working branches even if they hold writes that were never "
         "committed (otherwise such a new is refused).",
     ),
+    adopt: bool = typer.Option(
+        False,
+        "--adopt",
+        help="Take the bookmark's existing store branches (tether.ws.<dataset>."
+        "<bookmark>, its highest .N generation where there are several) as they "
+        "are, whatever they hold -- the branches of a dataset whose repository "
+        "was lost (`tether recover`). Objects with no such branch fork as usual. "
+        "Not on the trunk.",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show which branches would be forked; write nothing."
     ),
@@ -939,7 +948,8 @@ def new(
     trunk) writes straight to every object's upstream branch; `tether new REV`
     with no bookmark there is read-only. A bookmark another live checkout holds
     is refused unless `--shared`. A working branch that holds writes you never
-    committed is not reset unless `--discard`. `--dry-run` / `--plan` preview;
+    committed is not reset unless `--discard`; `--adopt` takes the bookmark's
+    existing branches as they are instead. `--dry-run` / `--plan` preview;
     `--from-plan` applies a saved plan.
     """
     _refuse_preview_with_apply(dry_run, plan_out, from_plan)
@@ -956,6 +966,7 @@ def new(
                 keep=keep,
                 eager=eager,
                 discard=discard,
+                adopt=adopt,
             )
             if dry_run or plan_out is not None:
                 _save_plan(repo, plan, plan_out)
@@ -964,6 +975,9 @@ def new(
             repo.apply_new(plan)
     except TetherError as exc:
         _fail(exc)
+    adopted = {
+        a.key: a for a in plan.actions if a.op == "adopt" and a.params.get("adopted")
+    }
     if json_out:
         _emit(
             {
@@ -971,6 +985,7 @@ def new(
                 "working_refs": repo.workspace.working_refs,
                 "pending_forks": repo.workspace.pending_forks,
                 "fork_points": repo.workspace.fork_points,
+                "adopted": {k: a.target for k, a in sorted(adopted.items())},
             },
             as_json=True,
         )
@@ -982,7 +997,9 @@ def new(
     verb = "kept working refs" if plan.context.get("keep") else "working refs set up"
     typer.echo(f"on {where}bookmark {repo.workspace.bookmark}; {verb}")
     for key, ref in sorted(repo.workspace.working_refs.items()):
-        if key in repo.objects:
+        if key in adopted:
+            typer.echo(f"  {key} -> {ref}  ({adopted[key].detail})")
+        elif key in repo.objects:
             typer.echo(f"  {key} -> {ref}")
         else:
             typer.echo(f"  {key} -> {ref}  (not at this revision; branch kept for gc)")
