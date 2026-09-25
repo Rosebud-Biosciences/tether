@@ -369,12 +369,18 @@ class ObjectBackend(Protocol):
         rule over the kind defaults; empty when nothing applies (the backend
         then falls back to the environment, as it always did)."""
         defaults = dict(getattr(self, "_secret_defaults", {}) or {})
+        return merge_config(defaults, self.secret_rule_for(locator))
+
+    def secret_rule_for(self, locator: Locator) -> dict[str, Any]:
+        """The one object's own `secrets.toml` entry -- the longest matching
+        URI-prefix rule, without the kind defaults `secrets_for` layers it on;
+        empty when none matches."""
         rules = getattr(self, "_secret_rules", {}) or {}
         uri = next((str(locator[k]) for k in self.URI_KEYS if locator.get(k)), None)
         if uri is None or not rules:
-            return defaults
+            return {}
         best = max((p for p in rules if uri.startswith(p)), key=len, default=None)
-        return {**defaults, **rules[best]} if best is not None else defaults
+        return dict(rules[best]) if best is not None else {}
 
     def state_addressable(self, locator: Locator, state: State) -> bool:
         """Whether *this* recorded state can be opened again later.
@@ -1155,6 +1161,24 @@ def canonical_uri(uri: str) -> str:
     be one object to pin ids, listings and `gc`), any other URL as written."""
     path = local_path(uri)
     return uri if path is None else path
+
+
+def merge_config(*layers: Mapping[str, Any]) -> dict[str, Any]:
+    """`layers` merged in order, a later one winning a key both set; a table
+    (mapping) in two layers is merged field by field, at every depth, not
+    replaced -- a `secrets.toml` that adds a catalog's `uri` keeps the
+    committed `type` and `warehouse`."""
+    out: dict[str, Any] = {}
+    for layer in layers:
+        for key, value in layer.items():
+            held = out.get(key)
+            if isinstance(value, Mapping) and isinstance(held, Mapping):
+                out[key] = merge_config(held, value)
+            elif isinstance(value, Mapping):
+                out[key] = merge_config(value)
+            else:
+                out[key] = value
+    return out
 
 
 def key_from_path(uri: str, suffixes: Collection[str] = ()) -> str | None:

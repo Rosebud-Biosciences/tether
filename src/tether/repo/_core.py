@@ -32,6 +32,7 @@ from tether.backends.base import (
     content_state,
     effective_capabilities,
     known_kinds,
+    merge_config,
     safe_config_keys,
     safe_option_keys,
 )
@@ -652,16 +653,16 @@ class RepoCore:
             committed = dict(self.config.backends.get(kind, {}))
             local = dict(self.secrets.backends.get(kind, {}))
             # The committed file is untrusted input: only allowlisted keys, with
-            # nested option tables screened. The secrets file may set anything
-            # and wins where both set a key.
+            # nested option tables screened. The secrets file may set anything,
+            # adds to a table both set, and wins a field both set.
             check_committed_config(
                 kind, safe_config_keys(kind), committed, safe_option_keys(kind)
             )
-            backend = build_backend(kind, {**committed, **local})
+            backend = build_backend(kind, merge_config(committed, local))
             backend.configure_cache(_m.tether_path(self.root) / _m.CACHE_DIR)
             backend.configure_checkout(Path(self.vcs.root))
             backend.configure_secrets(
-                {**committed, **local}, self._secret_rules_for(kind, backend)
+                merge_config(committed, local), self._secret_rules_for(kind, backend)
             )
             self._backends[kind] = backend
         elif self.secrets.objects:
@@ -675,7 +676,7 @@ class RepoCore:
                 if rules != getattr(backend, "_secret_rules", None):
                     committed = dict(self.config.backends.get(kind, {}))
                     local = dict(self.secrets.backends.get(kind, {}))
-                    backend.configure_secrets({**committed, **local}, rules)
+                    backend.configure_secrets(merge_config(committed, local), rules)
                 self._secret_stamp[kind] = stamp
         return backend
 
@@ -742,7 +743,7 @@ class RepoCore:
         committed = dict(self.config.backends.get(kind, {}))
         local = dict(self.secrets.backends.get(kind, {}))
         backend.configure_secrets(
-            {**committed, **local}, self._secret_rules_for(kind, backend)
+            merge_config(committed, local), self._secret_rules_for(kind, backend)
         )
 
     @staticmethod

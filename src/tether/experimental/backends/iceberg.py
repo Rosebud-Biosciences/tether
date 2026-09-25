@@ -105,9 +105,13 @@ class IcebergBackend(ObjectBackend):
                 '[uris."<identifier>"]',
                 kind="iceberg",
             )
-        props = dict(committed or self._config.get("catalog") or {})
-        # Catalog endpoint and credentials come from secrets.toml.
-        props.update(dict(self.secrets_for(locator).get("catalog") or {}))
+        # The kind's catalog (committed, then secrets.toml), the locator's,
+        # then the object's own secrets.toml entry: endpoint and credentials.
+        props = {
+            **dict(self._config.get("catalog") or {}),
+            **committed,
+            **dict(self.secret_rule_for(locator).get("catalog") or {}),
+        }
         name = str(locator.get("catalog_name", props.pop("name", "default")))
         cache_key = f"{name}:{sorted(props.items())}"
         cat = self._catalogs.get(cache_key)

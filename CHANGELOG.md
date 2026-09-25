@@ -14,6 +14,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `secrets.toml` adds to a table `tether.toml` also sets, instead of
+  replacing it: a committed Iceberg `catalog` keeps its `type` and
+  `warehouse` when `secrets.toml` adds the catalog's `uri`, and a committed
+  `storage_options.region` survives a secrets file that adds an endpoint. A
+  `[uris."..."]` or `[objects."..."]` entry adds to the kind's tables the same
+  way, and an Iceberg locator's `catalog` adds to the kind's.
 - `file`, `delta` and `lance`: a region given in more than one place
   (`secrets.toml`, the locator, `storage_options` under any spelling) reaches
   the store once, the most specific winning; obstore refused it as a

@@ -249,6 +249,105 @@ def test_secrets_file_supplies_what_the_committed_file_may_not(vcs_root: Path) -
     assert repo.secrets.backends == {}  # the earlier Repo read no file
 
 
+def test_secrets_file_adds_to_committed_tables(vcs_root: Path) -> None:
+    """A table set in both files is merged field by field, `secrets.toml`
+    winning where both set one: the committed `type` and `warehouse` of a
+    catalog survive a secrets file that adds only its `uri`, and a committed
+    `region` survives one that adds an endpoint, nested tables included."""
+    repo = Repo.init(vcs_root)
+    config = read_config(repo.root)
+    config.backends["iceberg"] = {
+        "catalog": {"type": "sql", "warehouse": "file:///w", "name": "lab"}
+    }
+    config.backends["file"] = {
+        "storage_options": {"region": "us-west-2", "conditional_put": "etag"}
+    }
+    write_config(repo.root, config)
+    secrets = vcs_root / ".tether" / SECRETS_FILENAME
+    secrets.write_text(
+        "[backends.iceberg]\n"
+        'catalog = { uri = "sqlite:///cat.db", name = "local" }\n'
+        "[backends.file.storage_options]\n"
+        'endpoint = "http://localhost:8333"\n'
+        "client_options = { timeout = 5 }\n"
+    )
+    secrets.chmod(0o600)
+    found = Repo.find(vcs_root)
+    iceberg = cast(Any, found.backend_for("iceberg"))
+    assert iceberg._config["catalog"] == {
+        "type": "sql",
+        "warehouse": "file:///w",
+        "uri": "sqlite:///cat.db",
+        "name": "local",
+    }
+    assert iceberg.secrets_for({"identifier": "ns.t"})["catalog"]["type"] == "sql"
+    file = cast(Any, found.backend_for("file"))
+    assert file._config["storage_options"] == {
+        "region": "us-west-2",
+        "conditional_put": "etag",
+        "endpoint": "http://localhost:8333",
+        "client_options": {"timeout": 5},
+    }
+
+
+def test_merge_config_merges_tables_at_every_depth() -> None:
+    from tether.backends.base import merge_config
+
+    committed = {"a": 1, "t": {"x": 1, "deep": {"p": 1, "q": 1}}, "keep": {"k": 1}}
+    local = {"a": 2, "t": {"y": 2, "deep": {"q": 2}}, "new": {"n": 1}}
+    merged = merge_config(committed, local)
+    assert merged == {
+        "a": 2,
+        "t": {"x": 1, "y": 2, "deep": {"p": 1, "q": 2}},
+        "keep": {"k": 1},
+        "new": {"n": 1},
+    }
+    assert committed["t"] == {"x": 1, "deep": {"p": 1, "q": 1}}  # inputs untouched
+    assert merge_config({"t": {"x": 1}}, {"t": "flat"}) == {"t": "flat"}
+
+
+def test_iceberg_catalog_layers_kind_locator_and_object_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The catalog an object opens is the kind's (committed, then secrets.toml),
+    then its locator's, then its own secrets.toml entry -- each adding to the
+    one before, the most specific winning a field both set."""
+    pytest.importorskip("pyiceberg")
+    import pyiceberg.catalog
+
+    from tether.experimental.backends.iceberg import IcebergBackend
+
+    seen: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        pyiceberg.catalog,
+        "load_catalog",
+        lambda name, **props: seen.append((name, props)) or object(),
+    )
+    kind = {
+        "catalog": {"type": "sql", "warehouse": "file:///kind", "uri": "sqlite:///k"}
+    }
+    b = IcebergBackend(kind)
+    b.configure_secrets(
+        kind, {"ns.t": {"catalog": {"credential": "c", "uri": "sqlite:///o"}}}
+    )
+    b._catalog({"identifier": "ns.t", "catalog": {"warehouse": "file:///obj"}})
+    assert seen[-1] == (
+        "default",
+        {
+            "type": "sql",
+            "warehouse": "file:///obj",
+            "uri": "sqlite:///o",
+            "credential": "c",
+        },
+    )
+    b._catalog({"identifier": "other.t"})
+    assert seen[-1][1] == {
+        "type": "sql",
+        "warehouse": "file:///kind",
+        "uri": "sqlite:///k",
+    }
+
+
 def test_two_icechunk_objects_two_credential_sets(
     vcs_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

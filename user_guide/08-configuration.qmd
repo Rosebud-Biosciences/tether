@@ -124,8 +124,11 @@ tables only the named keys pass (`region`, `allow_http`,
 `virtual_hosted_style_request`, `conditional_put`; `type`, `warehouse`,
 `name`). Any other key is refused by name, so an option tether has never
 heard of cannot reach a store from a clone. Everything else goes in
-`.tether/secrets.toml`, where the same tables may hold any key. Per-backend
-keys: [Backends](09-backends.qmd).
+`.tether/secrets.toml`, where the same tables may hold any key. A table set
+in both files is merged field by field, and `secrets.toml` wins a field both
+set. So a committed `catalog` keeps its `type` and `warehouse` when
+`secrets.toml` adds only the catalog's `uri`. Per-backend keys:
+[Backends](09-backends.qmd).
 
 ## Trust boundary: `.tether/secrets.toml` {#trust-boundary-tethersecretstoml}
 
@@ -169,9 +172,10 @@ password_env = "DOLT_PASSWORD"
 query = "SELECT name AS key, 'file' AS kind, uri FROM catalog"
 ```
 
-Resolution per object, first match wins: `[objects."<key>"]`, then the
-longest matching `[uris."<prefix>"]`, then `[backends.<kind>]`, then the
-environment and instance credential chain. Per-object entries also reach
+Resolution per object and per field, the most specific first:
+`[objects."<key>"]`, then the longest matching `[uris."<prefix>"]`, then
+`[backends.<kind>]`, then the environment and instance credential chain. A
+table given at two levels is merged, not replaced. Per-object entries also reach
 `add --create` and `gc --delete-stores`. `file`, `delta` and `lance` take
 the entries as storage options, and `icechunk` passes them to `s3_storage`.
 Dolt honours only the server's `[uris."mysql://host:port"]` entry (or one
