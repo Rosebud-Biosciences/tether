@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -10,9 +11,17 @@ from typing import Any
 import pytest
 
 from tether.backends.memory import MemoryBackend, default_store
-from tether.errors import ConfigError
+from tether.errors import ConfigError, StalePlanError, VcsError
 from tether.handles import MemoryHandle
-from tether.manifest import compute_pin_id, write_object
+from tether.manifest import (
+    compute_pin_id,
+    key_to_relpath,
+    listings_dir,
+    object_path,
+    read_workspace,
+    write_object,
+)
+from tether.plan import Plan
 from tether.repo import Repo
 
 typer_testing = pytest.importorskip("typer.testing")
@@ -407,3 +416,357 @@ def test_cli_exit_codes_follow_the_selection(
     r = runner.invoke(app, ["status", "db", "--snapshot", "--json"])
     assert r.exit_code == 0, r.output
     assert [o["key"] for o in json.loads(r.output)["objects"]] == ["db"]
+
+
+# --------------------------------------------------------------------------- #
+# commit KEY... and pull --key
+# --------------------------------------------------------------------------- #
+ODD = "odd dir/a (1) [x]"
+"""A key whose manifest path is fileset and pathspec syntax to jj and git."""
+
+
+def _rel(repo: Repo, key: str) -> str:
+    return (repo._dataset_rel() / ".tether" / key_to_relpath(key)).as_posix()
+
+
+def _text(repo: Repo, key: str) -> str:
+    return object_path(repo.root, key).read_text(encoding="utf-8")
+
+
+def _at(repo: Repo, commit: str | None, key: str) -> str | None:
+    assert commit is not None
+    return repo.vcs.read_file_at(commit, _rel(repo, key))
+
+
+def _dirty(repo: Repo, *keys: str) -> list[str]:
+    return [k for k in keys if repo.vcs.dirty([_rel(repo, k)])]
+
+
+@pytest.fixture
+def moved(vcs_root: Path) -> Repo:
+    """On the trunk: `a`, `b` and `ODD` committed, then moved upstream (their
+    position); `c` added and not committed; `tether.toml` edited."""
+    repo = Repo.init(vcs_root)
+    for key in ("a", "b", ODD):
+        _mem(repo, key)
+    repo.commit("baseline")
+    for key in ("a", "b", ODD):
+        default_store().write(_systems(repo, [key])[0], "main", {"k": key})
+    _mem(repo, "c")
+    with (repo.root / "tether.toml").open("a", encoding="utf-8") as fh:
+        fh.write("# a local note\n")
+    return repo
+
+
+def test_commit_keys_commits_only_the_selection(
+    moved: Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = moved
+    baseline = {k: _text(repo, k) for k in ("a", "b", ODD)}
+    ws = read_workspace(repo.root)
+    calls = _spy(monkeypatch, repo.backend_for("memory"), "fingerprint")
+
+    result = repo.commit("a and odd", keys=["a", "odd dir/"])
+    assert sorted(result.pinned) == ["a", ODD]
+    assert sorted(calls) == _systems(repo, ["a", ODD])
+    commit = result.vcs_commit
+    for key in ("a", ODD):
+        assert _at(repo, commit, key) == _text(repo, key) != baseline[key]
+    # Everything else is as last committed, in the commit and on disk.
+    assert _at(repo, commit, "b") == _text(repo, "b") == baseline["b"]
+    assert _at(repo, commit, "c") is None
+    toml = (repo._dataset_rel() / "tether.toml").as_posix()
+    assert "# a local note" not in (repo.vcs.read_file_at(str(commit), toml) or "")
+    assert _dirty(repo, "a", "b", ODD, "c") == ["c"]
+    assert repo.vcs.dirty([toml])
+    after = read_workspace(repo.root)
+    assert after.last_snapshot["b"] == ws.last_snapshot["b"]
+    assert after.last_snapshot["a"] != ws.last_snapshot["a"]
+    (b,) = repo.status(["b"]).objects
+    assert b.state_label == "modified"
+
+    # A later full commit picks up the rest: b's move, c's add, the edit.
+    rest = repo.commit("the rest")
+    assert sorted(rest.pinned) == ["b", "c"] and sorted(rest.unchanged) == ["a", ODD]
+    assert _at(repo, rest.vcs_commit, "c") == _text(repo, "c")
+    assert not repo.vcs.dirty(repo._vcs_paths())
+
+
+def test_commit_keys_hands_the_vcs_literal_paths(vcs_root: Path) -> None:
+    """A key's `[ab]` is characters, not a glob: the manifests it would match
+    as one stay out of the commit."""
+    repo = Repo.init(vcs_root)
+    for key in ("g/[ab]", "g/a", "g/b"):
+        _mem(repo, key)
+    repo.commit("baseline")
+    default_store().write(_systems(repo, ["g/[ab]"])[0], "main", {"v": 1})
+    repo.set_policy(["g/a", "g/b"], pin="record")
+    assert _dirty(repo, "g/[ab]", "g/a", "g/b") == ["g/a", "g/b"]
+
+    result = repo.commit("one", keys=["g/[ab]"])
+    assert list(result.pinned) == ["g/[ab]"]
+    assert _dirty(repo, "g/[ab]", "g/a", "g/b") == ["g/a", "g/b"]
+    assert _at(repo, result.vcs_commit, "g/[ab]") == _text(repo, "g/[ab]")
+
+
+def test_commit_keys_writes_and_commits_only_the_selections_listings(
+    vcs_root: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    repo = Repo.init(vcs_root)
+    for key in ("d1", "d2"):
+        data = tmp_path_factory.mktemp(key)
+        (data / "x.bin").write_bytes(key.encode())
+        repo.add(key, "file", {"uri": str(data)})
+    reldir = f"{repo._objects_reldir().rsplit('/', 1)[0]}/listings"
+
+    first = repo.commit("d1", keys=["d1"])
+    (listing,) = sorted(listings_dir(repo.root).glob("*.jsonl"))
+    assert repo.vcs.list_files_at(str(first.vcs_commit), reldir) == [
+        f"{reldir}/{listing.name}"
+    ]
+    assert _at(repo, first.vcs_commit, "d2") is None and _dirty(repo, "d2") == ["d2"]
+
+    second = repo.commit("d2", keys=["d2"])
+    assert len(repo.vcs.list_files_at(str(second.vcs_commit), reldir)) == 2
+    assert not repo.vcs.dirty(repo._vcs_paths(["d1", "d2"]))
+
+
+def test_commit_keys_on_a_bookmark_leaves_the_others_workspace_entries(
+    vcs_root: Path,
+) -> None:
+    repo = Repo.init(vcs_root)
+    for key in ("a", "b"):
+        _mem(repo, key)
+    repo.commit("baseline")
+    repo.new(bookmark="work")
+    _write(repo, "a", {"a": 1})
+    _write(repo, "b", {"b": 1})
+    ws = read_workspace(repo.root)
+
+    repo.commit("a", keys=["a"])
+    after = read_workspace(repo.root)
+    for table in ("base_states", "last_snapshot", "working_refs", "fork_points"):
+        assert getattr(after, table).get("b") == getattr(ws, table).get("b"), table
+    assert after.base_states["a"] != ws.base_states["a"]
+    assert not repo.stale_keys()
+    labels = {o.key: o.state_label for o in repo.status().objects}
+    assert labels == {"a": "clean", "b": "modified"}
+
+
+def test_undo_of_a_selective_commit_gives_back_only_its_manifests(
+    moved: Repo,
+) -> None:
+    repo = moved
+    baseline_odd = _text(repo, ODD)
+    repo.commit("a and odd", keys=["a", ODD])
+    written = {k: _text(repo, k) for k in ("a", ODD)}
+
+    report = repo.undo()
+    assert report.op.command == "commit"
+    assert any(line.startswith("uncommitted ") for line in report.restored)
+    # Its manifests are working-tree changes again (pins kept); the rest is
+    # as it was: b unchanged, c's add still uncommitted.
+    assert {k: _text(repo, k) for k in written} == written
+    assert _dirty(repo, "a", "b", ODD, "c") == ["a", ODD, "c"]
+
+    # Committing one of them again leaves the other a working-tree change.
+    again = repo.commit("a again", keys=["a"])
+    assert not again.pinned and again.unchanged == ["a"]
+    assert _at(repo, again.vcs_commit, "a") == written["a"]
+    assert _at(repo, again.vcs_commit, ODD) == baseline_odd
+    assert _dirty(repo, "a", "b", ODD, "c") == [ODD, "c"]
+
+
+def test_undo_of_a_selective_commit_without_vcs_restores_only_its_manifests(
+    moved: Repo,
+) -> None:
+    repo = moved
+    before = {k: _text(repo, k) for k in ("a", "b", ODD, "c")}
+    repo.commit("a only", keys=["a"], vcs=False)
+    assert [k for k in before if _text(repo, k) != before[k]] == ["a"]
+    report = repo.undo()
+    manifests = [line for line in report.restored if "manifest" in line]
+    assert manifests == ["a: manifest restored"]
+    assert {k: _text(repo, k) for k in before} == before
+
+
+def test_a_saved_selective_plan_applies_exactly_its_selection(moved: Repo) -> None:
+    repo = moved
+    baseline_b = _text(repo, "b")
+    assert "keys" not in repo.plan_commit("all").context
+    plan = repo.plan_commit("sel", keys=["odd dir/", "a"])
+    assert plan.context["keys"] == ["a", ODD]
+    assert sorted(a.key for a in plan.actions if a.op == "pin") == ["a", ODD]
+    assert sorted(plan.context["states"]) == ["a", ODD]
+    saved = plan.to_json()
+
+    # The selection is part of what the digest vouches for.
+    for edit in (["a", "b"], ["a"], None):
+        data = json.loads(saved)
+        if edit is None:
+            del data["context"]["keys"]
+        else:
+            data["context"]["keys"] = edit
+        with pytest.raises(StalePlanError, match="edited after it was saved"):
+            repo.apply_commit(Plan.from_json(json.dumps(data)))
+    # Keys named at apply must be the plan's.
+    with pytest.raises(ConfigError, match=re.escape(f"commits a, {ODD}, not b")):
+        repo.apply_commit(Plan.from_json(saved), keys=["b"])
+    with pytest.raises(ConfigError, match="commits every object, not a"):
+        repo.apply_commit(repo.plan_commit("all"), keys=["a"])
+
+    result = repo.apply_commit(Plan.from_json(saved), keys=["a", "odd dir/"])
+    assert sorted(result.pinned) == ["a", ODD]
+    assert _at(repo, result.vcs_commit, "b") == baseline_b
+    assert _dirty(repo, "b", "c") == ["c"]
+
+
+def test_a_selective_plan_is_stale_once_any_manifest_changes(moved: Repo) -> None:
+    """The plan binds to every manifest, not just the selection's: an object
+    registered since may share a selected one's branch space."""
+    repo = moved
+    plan = repo.plan_commit("a", keys=["a"])
+    _mem(repo, "late")
+    with pytest.raises(StalePlanError, match="manifests changed"):
+        repo.apply_commit(plan)
+
+
+def test_the_post_commit_check_covers_exactly_the_committed_manifests(
+    moved: Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = moved
+    commit = repo.commit("a", keys=["a"]).vcs_commit
+    assert commit is not None
+    repo._require_committed(commit, ["a"])
+    # The whole working tree's check would trip over c, which it leaves out.
+    with pytest.raises(VcsError, match=r"1 of the dataset's manifest\(s\) \(c\)"):
+        repo._require_committed(commit)
+    # A VCS that dropped the selected manifest is caught.
+    real = repo.vcs.files_at
+    monkeypatch.setattr(
+        repo.vcs,
+        "files_at",
+        lambda rev, reldir: {
+            p: t for p, t in real(rev, reldir).items() if not p.endswith("/a.toml")
+        },
+    )
+    with pytest.raises(VcsError, match=r"\(a\)"):
+        repo._require_committed(commit, ["a"])
+
+
+def test_pull_key_on_the_trunk_pulls_only_the_selection(
+    moved: Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = moved
+    baseline_b = _text(repo, "b")
+    # The uncommitted add and edit refuse a whole pull, not a selective one.
+    with pytest.raises(ConfigError, match="uncommitted edits"):
+        repo.pull()
+    ws = read_workspace(repo.root)
+    calls = _spy(monkeypatch, repo.backend_for("memory"), "fingerprint")
+
+    report = repo.pull(keys=["a"])
+    assert list(report.committed) == ["a"]
+    assert not report.unchanged and not report.skipped
+    assert calls == _systems(repo, ["a"])
+    assert _at(repo, report.vcs_commit, "a") == _text(repo, "a")
+    assert _at(repo, report.vcs_commit, "b") == _text(repo, "b") == baseline_b
+    assert _at(repo, report.vcs_commit, "c") is None and _dirty(repo, "c") == ["c"]
+    assert read_workspace(repo.root).last_snapshot["b"] == ws.last_snapshot["b"]
+
+    again = repo.pull(keys=["a"])
+    assert again.unchanged == ["a"] and again.vcs_commit is None
+    # The selection's own uncommitted manifest still refuses it.
+    with pytest.raises(ConfigError, match="uncommitted edits"):
+        repo.pull(keys=["c"])
+    with pytest.raises(ConfigError, match="no such object: nope"):
+        repo.pull(keys=["nope"])
+
+    monkeypatch.chdir(repo.root)
+    r = runner.invoke(app, ["pull", "--key", "odd dir/", "--key", "b", "--json"])
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert sorted(payload["committed"]) == ["b", ODD] and payload["vcs_commit"]
+    assert _dirty(repo, "a", "b", ODD, "c") == ["c"]
+
+
+def test_objects_sharing_a_branch_space_are_committed_and_pulled_together(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = Repo.init(vcs_root)
+    shared = _mem(repo, "s/x")
+    _mem(repo, "s/y", system=shared)
+    _mem(repo, "t/z", system=shared)
+    _mem(repo, "a")
+    backend = repo.backend_for("memory")
+    scopes = {k: backend.branch_scope(m.locator) for k, m in repo.objects.items()}
+    assert scopes["s/x"] == scopes["s/y"] == scopes["t/z"] != scopes["a"]
+    repo.commit("baseline")
+    store = default_store()
+    store.write(shared, "main", {"v": 1})
+    store.write(_systems(repo, ["a"])[0], "main", {"v": 1})
+
+    for keys, named, missing in (
+        (["s/x"], "s/x shares", "s/y, t/z"),
+        (["s/"], "s/x, s/y share", "t/z"),
+        (["s/x", "a"], "s/x shares", "s/y, t/z"),
+    ):
+        with pytest.raises(ConfigError) as err:
+            repo.commit("part", keys=keys)
+        message = str(err.value)
+        assert f"{named} a native branch space with {missing}:" in message
+        assert "add " in message and "to the selection" in message
+    with pytest.raises(
+        ConfigError, match="`tether pull --key s/x --key s/y --key t/z`"
+    ):
+        repo.pull(keys=["s/x"])
+    with pytest.raises(ConfigError, match="t/z"):
+        repo.plan_commit("part", keys=["s/"])
+    # Read-only commands need no such rule.
+    assert [o.key for o in repo.status(["s/x"]).objects] == ["s/x"]
+    assert list(repo.verify(["s/y"])) == ["s/y"]
+
+    # Named together, they share one pin; an object alone in its space
+    # commits alone.
+    together = repo.commit("s", keys=["s/", "t/z"])
+    assert sorted(together.pinned) == ["s/x", "s/y", "t/z"]
+    assert len({p.id for p in together.pinned.values() if p}) == 1
+    assert list(repo.commit("a", keys=["a"]).pinned) == ["a"]
+
+    monkeypatch.chdir(repo.root)
+    store.write(shared, "main", {"v": 2})
+    r = runner.invoke(app, ["commit", "s/x", "t/z", "-m", "part"])
+    assert r.exit_code == 1 and "with s/y" in r.output, r.output
+    r = runner.invoke(app, ["pull", "--key", "t/z"])
+    assert r.exit_code == 1 and "--key s/x --key s/y --key t/z" in r.output, r.output
+
+
+def test_cli_commit_takes_selectors_and_plans_keep_them(
+    moved: Repo,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    repo = moved
+    monkeypatch.chdir(repo.root)
+    saved = tmp_path_factory.mktemp("plans") / "commit.json"
+
+    r = runner.invoke(app, ["commit", "b", "-m", "b", "--dry-run", "--json"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["context"]["keys"] == ["b"]
+    r = runner.invoke(app, ["commit", "a", ODD, "-m", "sel", "--plan", str(saved)])
+    assert r.exit_code == 0, r.output
+    assert json.loads(saved.read_text())["context"]["keys"] == ["a", ODD]
+    r = runner.invoke(app, ["commit", "b", "--from-plan", str(saved)])
+    assert r.exit_code == 1 and "not b" in r.output, r.output
+    r = runner.invoke(app, ["commit", "--from-plan", str(saved), "--json"])
+    assert r.exit_code == 0, r.output
+    assert sorted(json.loads(r.output)["pinned"]) == ["a", ODD]
+    assert _dirty(repo, "a", "b", ODD, "c") == ["c"]
+    baseline_b = _text(repo, "b")
+
+    r = runner.invoke(app, ["commit", "b", "-m", "b", "--json"])
+    assert r.exit_code == 0, r.output
+    assert list(json.loads(r.output)["pinned"]) == ["b"]
+    assert _text(repo, "b") != baseline_b and _dirty(repo, "a", "b", ODD, "c") == ["c"]
+    r = runner.invoke(app, ["commit", "nope/", "-m", "x"])
+    assert r.exit_code == 1 and "no object under nope/" in r.output, r.output

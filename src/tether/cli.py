@@ -579,6 +579,12 @@ def pull(
     bookmark: str | None = typer.Argument(
         None, help="The bookmark to pull; default and only choice: the one you are on."
     ),
+    keys: list[str] = typer.Option(
+        [],
+        "--key",
+        help="Pull only this object: a key, or a prefix ending in '/' (zarr/); "
+        "repeatable. Objects sharing a native branch space are named together.",
+    ),
     message: str | None = typer.Option(
         None, "-m", "--message", help="Commit message (default: pull B: N objects)."
     ),
@@ -592,10 +598,12 @@ def pull(
     from the bookmark's commit is pinned and committed on the bookmark, which
     moves; the working copy ends up on top. Nothing moved: no commit. An
     immutable file that changed is refused. `undo` uncommits it (pins stay).
+    `--key` pulls only those objects, and commits only their manifests, as
+    `commit KEY...` does.
     """
     repo = _repo()
     try:
-        report = repo.pull(bookmark, message=message)
+        report = repo.pull(bookmark, keys=keys, message=message)
     except TetherError as exc:
         _fail(exc)
     if json_out:
@@ -759,6 +767,12 @@ def _load_plan(path: Path, expected: str) -> Plan:
 
 @app.command()
 def commit(
+    keys: list[str] | None = typer.Argument(
+        None,
+        help="Commit only these objects: a key, or a prefix ending in '/' (zarr/); "
+        "default: every object. Objects sharing a native branch space are named "
+        "together. With --from-plan: the plan's selection, or refused.",
+    ),
     message: str | None = typer.Option(
         None,
         "-m",
@@ -801,6 +815,11 @@ def commit(
     unrecoverable. Unchanged objects are skipped. Then the manifests are
     committed. `--dry-run` / `--plan` preview the actions; `--from-plan` applies
     a saved plan after checking nothing changed underneath it.
+
+    KEY... commits only those objects, like `git commit PATH`: only they are
+    fingerprinted and pinned, and only their manifests and listings are
+    committed. Every other manifest, and any other `.tether/` edit (another
+    object's add or remove, a tether.toml change), stays uncommitted.
     """
     _refuse_preview_with_apply(dry_run, plan_out, from_plan)
     repo = _repo()
@@ -809,12 +828,13 @@ def commit(
             plan = _load_plan(from_plan, "commit")
             if message is not None:
                 plan.context["message"] = message
-            result: CommitResult = repo.apply_commit(plan, vcs=not no_vcs)
+            result: CommitResult = repo.apply_commit(plan, keys=keys, vcs=not no_vcs)
         elif dry_run or plan_out is not None:
             if message is None:
                 _fail(TetherError("a message is required: -m/--message"))
             plan = repo.plan_commit(
                 message,
+                keys=keys,
                 strict=strict,
                 force=force,
                 do_snapshot=not no_snapshot,  # commit always sees the real state
@@ -830,6 +850,7 @@ def commit(
             # concurrent `remove` turns into an error mid-commit.
             result = repo.commit(
                 message,
+                keys=keys,
                 vcs=not no_vcs,
                 strict=strict,
                 force=force,

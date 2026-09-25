@@ -19,9 +19,9 @@ tether set KEY... | --all [--file immutable|versioned] [--pin native|record]
 tether remove KEY
 tether status [KEY...] [--snapshot | --no-snapshot]
 tether snapshot [KEY...]
-tether pull [BOOKMARK] [-m MESSAGE]
-tether commit -m MESSAGE [--no-vcs] [--strict] [--force] [--no-snapshot] [--dry-run | --plan FILE]
-tether commit --from-plan FILE [-m MESSAGE] [--no-vcs]
+tether pull [BOOKMARK] [--key KEY]... [-m MESSAGE]
+tether commit [KEY...] -m MESSAGE [--no-vcs] [--strict] [--force] [--no-snapshot] [--dry-run | --plan FILE]
+tether commit --from-plan FILE [KEY...] [-m MESSAGE] [--no-vcs]
 tether new [REV] [-b NAME] [--shared] [--keep] [--eager | --lazy] [--discard] [--dry-run | --plan FILE | --from-plan FILE]
 tether open KEY [-r REV] [--read-only | --writable] [--with-password]
 tether restore KEY... --from REV [--discard] [--dry-run | --plan FILE | --from-plan FILE]
@@ -90,6 +90,19 @@ they read, so a key only one side of a `diff` has can be named.
 `verify --all-history` selects from every key history has had. `restore`
 and `promote` select the same way. In Python, `Repo.select_keys` resolves
 selectors, and these methods take them as `keys=`.
+
+`commit KEY...` and `pull --key KEY` write a subset, as `git commit PATH`
+does. Only the objects named are fingerprinted and pinned, and only their
+manifests and listings are written and go into the VCS commit. Every other
+manifest stays as last committed, with its `workspace.toml` entries, and
+any other uncommitted edit under `.tether/` stays uncommitted: another
+object's `add` or `remove`, a `tether.toml` change. A later commit without
+keys picks them up. Objects in one branch scope (two databases of a Neon
+project, two keys on one Icechunk store) share a pin and a working branch,
+so they are named together. Naming only some of them is refused, and the
+error lists the ones to add. A saved plan records its selection in
+`context.keys`, under the plan's digest, and `--from-plan` applies exactly
+that. `KEY...` given with `--from-plan` must be the same selection.
 
 ## Versions and environment
 
@@ -270,7 +283,8 @@ fingerprinted.
    the state (Addressable, `--pin record`). Observed states are recorded
    `recoverable = false`, or refused with `--strict`.
 4. Write the manifests and listings, then `jj commit` / `git commit` scoped
-   to them (`--no-vcs` skips).
+   to them (`--no-vcs` skips). With `KEY...`, steps 2 to 4 cover only the
+   objects named ([Selecting objects](#selecting-objects)).
 5. Move the bookmark onto the commit, in the same jj operation.
 
 A failure after the pins rolls the commit back as a unit
@@ -283,7 +297,8 @@ The dataset's fetch, for the bookmark this working copy is on
 moved is pinned and committed on the bookmark; when nothing moved, nothing
 is committed. Objects with no commit or no branch yet are skipped with a
 reason. A changed `file = "immutable"` object and uncommitted manifest
-edits are refused.
+edits are refused. `--key` pulls only the objects named, and then only
+their own uncommitted edits are refused.
 
 ## `new`
 

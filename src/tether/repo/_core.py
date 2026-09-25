@@ -1502,7 +1502,12 @@ class RepoCore:
             k: (self.objects[k].to_toml() if k in self.objects else None) for k in keys
         }
 
-    def _vcs_paths(self) -> list[str]:
+    def _vcs_paths(self, keys: Iterable[str] | None = None) -> list[str]:
+        """What a dataset commit hands the VCS: the committed surface, or with
+        `keys` only those objects' manifests and the listings of their states
+        (see `_object_paths`)."""
+        if keys is not None:
+            return self._object_paths(keys)
         # Never include the untracked workspace file; commit the committed
         # surface explicitly (objects dir, listings, the ignore file, config).
         rel = self._dataset_rel()
@@ -1514,6 +1519,27 @@ class RepoCore:
         if any(listings_dir(self.root).glob("*.jsonl")):
             paths.append((rel / _m.TETHER_DIR / _m.LISTINGS_DIR).as_posix())
         return paths
+
+    def _object_paths(self, keys: Iterable[str]) -> list[str]:
+        """Each registered key's manifest, and the listing of its state where
+        one is stored."""
+        rel = self._dataset_rel()
+        paths: list[str] = []
+        for key in keys:
+            m = self.objects.get(key)
+            if m is None:
+                continue
+            paths.append((rel / _m.TETHER_DIR / _m.key_to_relpath(key)).as_posix())
+            if m.state is None:
+                continue
+            name = listing_name(
+                m.kind,
+                self.backend_for(m.kind).identity(m.locator),
+                self._content_of(m.kind, m.state),
+            )
+            if (listings_dir(self.root) / name).is_file():
+                paths.append(self._listing_relpath(name))
+        return list(dict.fromkeys(paths))
 
     def _listing_relpath(self, name: str) -> str:
         rel = self._dataset_rel()

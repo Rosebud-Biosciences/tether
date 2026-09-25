@@ -212,6 +212,14 @@ _JJ_TRACK_ONLY = (
 nothing new, so lifting the new-file size limit (a listing may exceed the
 user's) reaches the named paths only, never the user's files."""
 
+
+def _jj_paths(relpaths: list[str]) -> list[str]:
+    """Root-relative paths as jj filesets matching exactly them (a directory:
+    everything under it). A bare path is parsed as a fileset expression, in
+    which an object key's spaces or parentheses are syntax."""
+    return [f"root:{json.dumps(p, ensure_ascii=False)}" for p in relpaths]
+
+
 _JJ_PARKED = ("--config", 'snapshot.auto-track="none()"')
 """For every call after tether has moved the working copy itself, until it
 is back (`JjAdapter._parked`). An older commit's `.gitignore` may not ignore
@@ -915,7 +923,7 @@ class JjAdapter:
         size limit may leave them out, and a commit of untracked paths is an
         empty commit that jj reports as a success."""
         if relpaths:
-            self._jj("file", "track", *_JJ_TRACK_ONLY, *relpaths)
+            self._jj("file", "track", *_JJ_TRACK_ONLY, *_jj_paths(relpaths))
 
     def _git_store(self) -> tuple[Path, Path | None] | None:
         """Locate the git object store backing this jj repo.
@@ -970,7 +978,7 @@ class JjAdapter:
             "--ignore-working-copy",
             "-r",
             rev,
-            relpath,
+            f"root-file:{json.dumps(relpath, ensure_ascii=False)}",
             check=False,
         )
         if out.returncode != 0:
@@ -984,7 +992,7 @@ class JjAdapter:
             "--ignore-working-copy",
             "-r",
             rev,
-            reldir,
+            *_jj_paths([reldir]),
             check=False,
         )
         if out.returncode != 0:
@@ -1405,7 +1413,7 @@ class JjAdapter:
         # A new manifest is untracked until tracked, and `diff` does not show
         # untracked files; git's `status --porcelain` counts them.
         self._track(relpaths)
-        out = self._jj("diff", "--summary", "-r", "@", *relpaths)
+        out = self._jj("diff", "--summary", "-r", "@", *_jj_paths(relpaths))
         return bool(out.stdout.strip())
 
     def tracked(
@@ -1446,7 +1454,7 @@ class JjAdapter:
                 "--config",
                 f"experimental-advance-branches.enabled-branches={json.dumps([advance])}",
             ]
-        self._jj(*args, *relpaths)
+        self._jj(*args, *_jj_paths(relpaths))
         commit = self.resolve("@-")
         if advance is not None and self.bookmarks().get(advance) != commit:
             # The bookmark was not on the parent (or the setting is gone in
@@ -1809,7 +1817,12 @@ class GitAdapter:
 
     def dirty(self, relpaths: list[str]) -> bool:
         out = self._git(
-            "status", "--porcelain", "--untracked-files=all", "--", *relpaths
+            "--literal-pathspecs",
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            *relpaths,
         )
         return bool(out.stdout.strip())
 
@@ -1829,15 +1842,18 @@ class GitAdapter:
     def commit(
         self, relpaths: list[str], message: str, *, advance: str | None = None
     ) -> str:
-        self._git("add", "--", *relpaths)
+        # Pathspecs are literal: an object key may hold `*`, `?` or `[`.
+        self._git("--literal-pathspecs", "add", "--", *relpaths)
         try:
-            self._git("commit", "-m", message, "--", *relpaths)
+            self._git("--literal-pathspecs", "commit", "-m", message, "--", *relpaths)
         except VcsError:
             # A hook or a missing identity refused the commit. The index still
             # holds what `add` staged: manifests the caller is about to roll
             # back, naming pins it is about to release. Left there, the user's
             # next plain `git commit` records them.
-            self._git("reset", "-q", "--", *relpaths, check=False)
+            self._git(
+                "--literal-pathspecs", "reset", "-q", "--", *relpaths, check=False
+            )
             raise
         commit = self.current_rev()
         if advance is not None and self.bookmarks().get(advance) != commit:

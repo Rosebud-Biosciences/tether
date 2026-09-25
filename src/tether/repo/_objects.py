@@ -319,7 +319,11 @@ class ObjectOps(RepoCore):
 
     # -- pull ------------------------------------------------------------------ #
     def pull(
-        self: Repo, bookmark: str | None = None, *, message: str | None = None
+        self: Repo,
+        bookmark: str | None = None,
+        *,
+        keys: Sequence[str] | None = None,
+        message: str | None = None,
     ) -> PullReport:
         """Fetch the heads of this bookmark's branches and commit them onto it.
 
@@ -334,11 +338,17 @@ class ObjectOps(RepoCore):
         Args:
             bookmark: Must be the bookmark this workspace works on (default).
                 Pulling another bookmark means `tether new NAME` first.
+            keys: Pull only these objects (keys, or prefixes ending in `/`;
+                see `select_keys`): only their heads are read, and only their
+                manifests and listings committed, as `commit` does with
+                `keys`. Default: every object.
             message: Commit message; default `pull <bookmark>: <n> object(s)`.
 
         Raises:
-            ConfigError: No bookmark, another bookmark, or `.tether/` has
-                uncommitted manifest edits.
+            ConfigError: No bookmark, another bookmark, a selector that
+                matches nothing or names only part of a native branch space,
+                or `.tether/` has uncommitted manifest edits (with `keys`,
+                those objects' own).
             ImmutableObjectModified: An Observed `file = "immutable"` object
                 changed; re-register it to accept the new state.
             MultiObjectError: A fingerprint failed.
@@ -355,7 +365,10 @@ class ObjectOps(RepoCore):
                     f"this workspace works on {mine!r}; `tether new {bookmark}` first"
                 )
             self._check_on_bookmark()
-            if self.vcs.dirty(self._vcs_paths()):
+            selected = self.select_keys(keys) if keys else None
+            if selected is not None:
+                self._require_whole_scopes(selected, "pull")
+            if self.vcs.dirty(self._vcs_paths(selected)):
                 raise ConfigError(
                     "manifests have uncommitted edits; `tether commit` them (or undo) "
                     "before pulling"
@@ -363,7 +376,8 @@ class ObjectOps(RepoCore):
             report = PullReport(bookmark=mine)
             moving = set(self.moving_keys())
             targets: list[str] = []
-            for key, m in self.objects.items():
+            for key in list(self.objects) if selected is None else selected:
+                m = self.objects[key]
                 if m.state is None:
                     report.skipped[key] = "not committed yet; the first commit reads it"
                 elif key in moving:
@@ -398,7 +412,7 @@ class ObjectOps(RepoCore):
                 return report
             n = len(report.committed)
             text = message or f"pull {mine}: {n} object{'s' if n != 1 else ''}"
-            plan = self.plan_commit(text, fetched=fetched)
+            plan = self.plan_commit(text, keys=selected, fetched=fetched)
             result = self.apply_commit(plan, verify=False)
             report.vcs_commit = result.vcs_commit
             report.pinned = dict(result.pinned)

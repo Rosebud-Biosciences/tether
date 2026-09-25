@@ -229,6 +229,13 @@ Keep writing on the same branches and committing as often as you like. Each
 commit pins the latest state and moves the bookmark, and the earlier pins
 stay valid. `commit` is not `jj commit`: it starts nothing new.
 
+To record only some objects, name them, as with `git commit PATH`:
+`tether commit zarr/ db/metrics -m "..."` pins `db/metrics` and everything
+under `zarr/`. The other objects keep their last committed manifests, and a
+later `tether commit` picks them up. Objects that share a branch, such as two
+databases of one Neon project, are named together
+([Selecting objects](07-cli.qmd#selecting-objects)).
+
 ## Landing it: `tether promote`
 
 Your dataset commit pins the bookmark's state in every system. Landing it

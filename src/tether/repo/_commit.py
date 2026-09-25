@@ -9,6 +9,7 @@ try:  # POSIX advisory locks; Windows has no fcntl and gets no writer lock
     import fcntl
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +20,7 @@ from tether.backends.base import (
     tier_of,
 )
 from tether.errors import (
+    ConfigError,
     StalePlanError,
     UnpinnedStateError,
     VcsError,
@@ -62,6 +64,7 @@ class CommitOps(RepoCore):
         self: Repo,
         message: str,
         *,
+        keys: Sequence[str] | None = None,
         strict: bool = False,
         force: bool = False,
         do_snapshot: bool = True,
@@ -77,6 +80,13 @@ class CommitOps(RepoCore):
 
         Args:
             message: VCS commit message (stored in the plan).
+            keys: Commit only these objects (keys, or prefixes ending in `/`;
+                see `select_keys`), like `git commit PATH`: only they are
+                fingerprinted and pinned, and only their manifests and
+                listings go into the VCS commit. Every other manifest, and
+                any other edit under `.tether/`, stays as it is. The plan
+                records the selection (`context["keys"]`). Default: every
+                object, and the whole committed surface.
             strict: Fail instead of recording Observed objects unrecoverably.
             force: Skip quiescence checks (`NEEDS_QUIESCENCE` backends).
             do_snapshot: Take a fresh `snapshot` first.
@@ -85,27 +95,35 @@ class CommitOps(RepoCore):
                 `pull` plan). Internal.
 
         Raises:
+            ConfigError: A selector matches no object, or `keys` names only
+                some of the objects that share a native branch space.
             UnpinnedStateError: `strict` and an Observed object changed.
             BackendError: A quiescence check failed.
             MultiObjectError: The snapshot failed for one or more objects.
         """
+        selected = self.select_keys(keys) if keys else None
+        if selected is not None:
+            self._require_whole_scopes(
+                selected, "pull" if fetched is not None else "commit"
+            )
         moving = set(self.moving_keys())
         if fetched is not None:
             states = dict(fetched)
         elif do_snapshot:
-            states = dict(self.snapshot(upstream=False))
+            states = dict(self.snapshot(selected, upstream=False))
         else:
             states = dict(self.workspace.last_snapshot)
+        chosen = list(self.objects) if selected is None else selected
         if fetched is None:
             # Positions: an object with no working branch commits at its
             # previous pin, whatever a cached fan-out says about its upstream.
-            for key, m in self.objects.items():
+            for key in chosen:
+                m = self.objects[key]
                 if key not in moving and m.state is not None:
                     states[key] = dict(m.state)
-        keys = list(self.objects)
 
         if not force:
-            for key in keys:
+            for key in chosen:
                 m = self.objects[key]
                 backend = self.backend_for(m.kind)
                 eff = effective_capabilities(backend, m.locator, m.policy)
@@ -119,11 +137,13 @@ class CommitOps(RepoCore):
             context={
                 "message": message,
                 "manifest_hash": self.current_manifest_hash(),
-                "states": {k: states[k] for k in keys if k in states},
+                "states": {k: states[k] for k in chosen if k in states},
                 "workspace_id": self.workspace.workspace_id,
                 "pull": fetched is not None,
             },
         )
+        if selected is not None:
+            plan.context["keys"] = selected
         # Where first, then what: a plan applied in the wrong checkout or on
         # another bookmark is told so, not that the manifests differ there.
         plan.require(
@@ -141,12 +161,14 @@ class CommitOps(RepoCore):
             f"{self.workspace.bookmark or 'no bookmark'}; the checkout is on "
             "{observed} now; re-run the plan",
         )
+        # Every manifest, a selective plan's too: an object registered since
+        # may share a selected one's branch space.
         plan.require(
             "manifest_hash",
             plan.context["manifest_hash"],
             detail="manifests changed since the plan was made; re-run the plan",
         )
-        for key in keys:
+        for key in chosen:
             m = self.objects[key]
             backend = self.backend_for(m.kind)
             eff = effective_capabilities(backend, m.locator, m.policy)
@@ -225,24 +247,44 @@ class CommitOps(RepoCore):
         self: Repo,
         plan: Plan,
         *,
+        keys: Sequence[str] | None = None,
         vcs: bool = True,
         verify: bool = True,
     ) -> CommitResult:
         """Execute a plan from `plan_commit`.
 
+        The plan's selection (`context["keys"]`, none: every object) is what
+        is applied: only those objects are re-fingerprinted, and only their
+        manifests and listings are committed.
+
         Args:
             plan: The plan to apply.
-            vcs: Commit `.tether/` and `tether.toml` to the enclosing repository.
+            keys: The selection the caller means the plan to commit (keys, or
+                prefixes ending in `/`); refused unless it is the plan's.
+            vcs: Commit `.tether/` and `tether.toml` to the enclosing
+                repository -- with a selection, only its objects' files.
             verify: Re-fingerprint the planned objects and refuse the plan if
                 any state or the manifest set changed since it was computed.
 
         Raises:
+            ConfigError: `keys` is not the selection the plan records.
             StalePlanError: The plan was computed for a different world.
             BackendError: A pin failed (pins created by this call are released
                 best-effort).
         """
         with self._writer_lock(), self._repo_lock():
             self._verify_plan(plan, "commit", verify=verify)
+            recorded = plan.context.get("keys")
+            selected = None if recorded is None else [str(k) for k in recorded]
+            if keys:
+                asked = self.select_keys(keys)
+                if selected is None or asked != sorted(selected):
+                    raise ConfigError(
+                        "this commit plan commits "
+                        + ("every object" if selected is None else ", ".join(selected))
+                        + f", not {', '.join(asked)}; apply it without keys, or "
+                        "re-run the plan with the ones you mean"
+                    )
             message = str(plan.context.get("message", ""))
             if vcs:
                 self._check_on_bookmark()
@@ -250,7 +292,7 @@ class CommitOps(RepoCore):
             if verify:
                 # Per object, against one snapshot: a race during apply, not a
                 # plan precondition (see `_verify_plan`).
-                current = self.snapshot()
+                current = self.snapshot(selected)
                 for a in object_actions:
                     if not self._same(
                         a.kind, current.get(a.key), a.params.get("state")
@@ -271,7 +313,7 @@ class CommitOps(RepoCore):
             outcomes: dict[str, tuple[State, Pin | None, bool]] = {}
             is_pull = bool(plan.context.get("pull"))
             will_write = bool(object_actions) or (
-                vcs and self.vcs.dirty(self._vcs_paths())
+                vcs and self.vcs.dirty(self._vcs_paths(selected))
             )
             if not will_write:
                 return result
@@ -355,14 +397,15 @@ class CommitOps(RepoCore):
                 # Commit when something was pinned, and also when the manifests are
                 # already dirty in the working tree (an undone commit, an `add`, an
                 # `import`): the dataset commit is what makes them history.
-                if vcs and (outcomes or self.vcs.dirty(self._vcs_paths())):
+                paths = self._vcs_paths(selected) if vcs else []
+                if vcs and (outcomes or self.vcs.dirty(paths)):
                     # The bookmark follows the commit: its store branches' heads
                     # are what the commit pinned.
                     result.vcs_commit = self.vcs.commit(
-                        self._vcs_paths(), message, advance=self.workspace.bookmark
+                        paths, message, advance=self.workspace.bookmark
                     )
                     self._progress(op, "vcs-commit", commit=result.vcs_commit)
-                    self._require_committed(result.vcs_commit)
+                    self._require_committed(result.vcs_commit, selected)
             except Exception as exc:
                 landed = self._vcs_commit_landed(pre["vcs"]) if vcs else None
                 if landed is not None:
@@ -426,6 +469,7 @@ class CommitOps(RepoCore):
         self: Repo,
         message: str,
         *,
+        keys: Sequence[str] | None = None,
         vcs: bool = True,
         strict: bool = False,
         force: bool = False,
@@ -445,6 +489,8 @@ class CommitOps(RepoCore):
 
         Args:
             message: VCS commit message.
+            keys: Commit only these objects (keys, or prefixes ending in `/`),
+                like `git commit PATH`; see `plan_commit`.
             vcs: Commit `.tether/` and `tether.toml` to the enclosing repository.
             strict: Fail instead of recording Observed objects unrecoverably.
             force: Skip quiescence checks (`NEEDS_QUIESCENCE` backends).
@@ -454,6 +500,8 @@ class CommitOps(RepoCore):
             What was pinned, recorded, or skipped, and the VCS commit id.
 
         Raises:
+            ConfigError: A selector matches no object, or `keys` names only
+                some of the objects that share a native branch space.
             UnpinnedStateError: `strict` and an Observed object changed.
             BackendError: A quiescence check or pin failed.
             MultiObjectError: The snapshot failed for one or more objects.
@@ -463,6 +511,7 @@ class CommitOps(RepoCore):
         with self._writer_lock():
             plan = self.plan_commit(
                 message,
+                keys=keys,
                 strict=strict,
                 force=force,
                 do_snapshot=do_snapshot,
@@ -471,8 +520,46 @@ class CommitOps(RepoCore):
             # branch that moved since changes nothing about what lands.
             return self.apply_commit(plan, vcs=vcs, verify=False)
 
-    def _require_committed(self: Repo, commit: str) -> None:
-        """Every manifest in the working tree must be in the commit's tree.
+    def _require_whole_scopes(self: Repo, selected: Sequence[str], verb: str) -> None:
+        """Refuse a `commit` or `pull` selection that names only some of the
+        objects in a native branch space (one `(kind, branch_scope)`: two
+        databases of a Neon project, two keys on one Icechunk store). They
+        share a pin and a working branch, so they are committed together.
+
+        Raises:
+            ConfigError: Names the objects missing from the selection.
+        """
+        chosen = set(selected)
+        kinds = {self.objects[k].kind for k in chosen}
+        scopes: dict[tuple[str, str], list[str]] = {}
+        for key, m in self.objects.items():
+            if m.kind in kinds:
+                scope = (m.kind, self.backend_for(m.kind).branch_scope(m.locator))
+                scopes.setdefault(scope, []).append(key)
+        named: set[str] = set()
+        missing: set[str] = set()
+        for members in scopes.values():
+            left = [k for k in members if k not in chosen]
+            if left and len(left) < len(members):
+                named.update(k for k in members if k in chosen)
+                missing.update(left)
+        if not missing:
+            return
+        flag = "--key " if verb == "pull" else ""
+        again = " ".join(f"{flag}{k}" for k in sorted(chosen | missing))
+        raise ConfigError(
+            f"{', '.join(sorted(named))} share{'s' if len(named) == 1 else ''} a "
+            f"native branch space with {', '.join(sorted(missing))}: one pin and "
+            f"one working branch for all of them, so they {verb} together; add "
+            f"{'it' if len(missing) == 1 else 'them'} to the selection "
+            f"(`tether {verb} {again}`)"
+        )
+
+    def _require_committed(
+        self: Repo, commit: str, keys: Sequence[str] | None = None
+    ) -> None:
+        """Every manifest the commit was given must be in its tree: the
+        working tree's, or with `keys` (a selective commit) theirs.
 
         jj commits what it tracks and reports success either way: a dataset
         under an ignored directory made an empty dataset commit that `status`
@@ -483,7 +570,7 @@ class CommitOps(RepoCore):
         committed = self.vcs.files_at(commit, reldir)
         missing = sorted(
             key
-            for key in self.objects
+            for key in (self.objects if keys is None else keys)
             if f"{reldir}/{Path(*key_to_relpath(key).parts[1:]).as_posix()}"
             not in committed
         )

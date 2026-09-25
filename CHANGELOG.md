@@ -15,6 +15,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `--key`: an exact key or a prefix ending in `/` (`zarr/`). Only those
   objects are contacted and reported. In Python it is `keys=` on each
   method, and `Repo.select_keys`, which `promote` and `restore` now use too.
+- `commit KEY...` and `pull --key KEY` commit only those objects, as `git
+  commit PATH` does. Other manifests and uncommitted `.tether/` edits stay
+  out of the commit, and objects sharing a branch space are named together.
+  A saved plan records its selection under its digest.
 
 ### Fixed
 
