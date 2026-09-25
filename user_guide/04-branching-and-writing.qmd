@@ -427,6 +427,25 @@ bookmark forks from the pin, as if it had been the branch head. After that
 drops `at` from the manifest. The per-system forms of `at` are in
 [Backends](09-backends.qmd); Neon and files have none.
 
+### Starting from a branch made outside tether
+
+To start a bookmark from a branch someone made with the store's own tools,
+or from a tag or a state id, restore onto it on that bookmark:
+
+```bash
+tether new -b try-theirs
+tether restore zarr/imaging --at their-experiment
+```
+
+The bookmark's branch (`tether.ws.<dataset>.try-theirs`) is forked from the
+state `their-experiment` names when the plan is made. It is a copy:
+`their-experiment` itself is never moved or written. The object reads as
+`modified` until the next `commit` pins it. `--at` takes what `add --at`
+takes for that backend (Lance: a tag or a version). A branch that holds
+writes nobody committed needs `--discard`. On the trunk `restore --at` is
+refused, because there the working ref is the upstream branch itself:
+register the object `--at` instead, or `tether pull`.
+
 ## Working on the trunk
 
 Some objects should never be forked: a production database, or a shared

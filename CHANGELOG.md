@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `tether init --dataset-id ID` uses that id instead of a fresh one; anything
+  but 8 lowercase hex characters is refused.
+- `tether restore KEY... --at REF` starts the bookmark's branch as a copy of
+  a native branch, tag or state id. `REF` itself is never moved.
+- `tether new --adopt` takes the bookmark's existing store branches as they
+  are, uncommitted writes included, instead of resetting them.
+- `tether recover` lists tether's refs in each store by dataset id and prints
+  the steps that take back a dataset whose repository was lost.
+
 ## [0.1.0b5] - 2026-09-25
 
 ### Added

@@ -12,7 +12,7 @@ in use: [Pinning](03-pinning.qmd),
 [Reclaiming Storage](05-reclaiming-storage.qmd).
 
 ```
-tether init [PATH]
+tether init [PATH] [--dataset-id ID]
 tether backends [--json]
 tether add [KEY] [LOCATOR] --kind KIND [--branch BRANCH] [--at STATE | --pick] [locator options] [--set k=v]... [--file immutable|versioned] [--pin native|record] [--create]
 tether set KEY... | --all [--file immutable|versioned] [--pin native|record]
@@ -22,9 +22,9 @@ tether snapshot [KEY...]
 tether pull [BOOKMARK] [--key KEY]... [-m MESSAGE]
 tether commit [KEY...] -m MESSAGE [--no-vcs] [--strict] [--force] [--no-snapshot] [--dry-run | --plan FILE]
 tether commit --from-plan FILE [KEY...] [-m MESSAGE] [--no-vcs]
-tether new [REV] [-b NAME] [--shared] [--keep] [--eager | --lazy] [--discard] [--dry-run | --plan FILE | --from-plan FILE]
+tether new [REV] [-b NAME] [--shared] [--keep] [--eager | --lazy] [--discard | --adopt] [--dry-run | --plan FILE | --from-plan FILE]
 tether open KEY [-r REV] [--read-only | --writable] [--with-password]
-tether restore KEY... --from REV [--discard] [--dry-run | --plan FILE | --from-plan FILE]
+tether restore KEY... (--from REV | --at REF) [--discard] [--dry-run | --plan FILE | --from-plan FILE]
 tether promote [KEY]... [-r REV] [--strategy auto|ff|merge] [-m MESSAGE] [--dry-run | --plan FILE | --from-plan FILE]
 tether verify [KEY...] [-r REV] [--all-history] [--deep]
 tether diff [REV_A] [REV_B] [--key KEY]... [--content] [--limit N]
@@ -36,6 +36,7 @@ tether forget-workspace [WORKSPACE_ID] [--dry-run | --plan FILE | --from-plan FI
 tether ops [-n N]
 tether undo [OP_ID] [--discard]
 tether repair [--all-history] [--dry-run | --plan FILE | --from-plan FILE]
+tether recover [KEY...]
 tether upgrade [--ignore-immutable] [--dry-run | --plan FILE | --from-plan FILE]
 tether export PATH [--rev REV]... [--all-history | --no-all-history] [--format sqlite|parquet|csv|jsonl] [--listings] [--workspace] [--append]
 tether publish [--to DSN] [--schema NAME] [--rev REV]... [--listings] [--dry-run]
@@ -211,6 +212,15 @@ The heads a plan reviewed are what the stores move *from*. `fork`,
 declares it per object. A backend whose methods take no `expected` moves
 unconditionally, with a warning.
 
+## `init`
+
+`tether init [PATH]` writes `tether.toml` and `.tether/` into an existing
+jj or git repository and puts the working copy on the trunk bookmark. It
+generates the [dataset id](08-configuration.qmd#dataset-id), unless
+`--dataset-id ID` gives one: 8 lowercase hex characters, or it is refused.
+Reusing a lost dataset's id takes back what its stores still hold
+([Recovering a lost dataset repo](14-troubleshooting.qmd#recovering-a-lost-dataset-repo)).
+
 ## `add`, `set`, `remove`
 
 The positional `LOCATOR` becomes the `uri` field. Named options map to
@@ -324,6 +334,18 @@ reset onto it. A branch holding writes no commit pins stops `new`
 them, or pass `--discard`. A peer's: `--shared` adopts the branch as it is
 (`adopt`) when it builds on the bookmark's pin.
 
+`--adopt` takes the bookmark's existing branch in each store as it is,
+whatever it holds (`adopt`): no reset, no copy, no `--discard`. Where a
+store made siblings (`.2`, `.3`), the highest generation is taken, and the
+plan says which. This is how the branches of a dataset whose repository
+was lost come back
+([Recovering a lost dataset repo](14-troubleshooting.qmd#recovering-a-lost-dataset-repo)).
+An object with no such branch forks as usual. The plan binds to each
+adopted head, so a saved plan is stale once the branch moves. `status`
+then shows the adopted writes as `modified`, and `commit` pins them.
+`--adopt` is refused on the trunk and with `--keep` or `--discard`, and a
+bookmark another live checkout holds still needs `--shared`.
+
 ## `open`
 
 | Handle | Address |
@@ -356,6 +378,16 @@ touches nothing else. The next `commit` pins what you restored, and
 `promote` treats the branch as forked from `REV`. It reads each branch as
 the store has it, a fork `new` deferred included. Writes nobody committed
 are refused unless `--discard`, and an unreadable head is refused outright.
+
+`tether restore KEY... --at REF` starts the branch from a native ref or
+state in each object's store instead: a branch, tag or state id, as
+[`add --at`](#add-set-remove) takes it for the backend. The plan resolves
+`REF` and records it with the state, under its digest. Apply forks the
+bookmark's branch from that recorded state, moving it only from the head the
+plan saw, and `REF` itself is never moved or written. The object then reads
+as `modified` until the next `commit` pins it. The `--discard` rule is the
+same. `--at` is refused on the trunk (re-register the object `--at`, or
+`pull`), for objects that cannot fork, and together with `--from`.
 
 ## `promote`
 
@@ -423,7 +455,7 @@ undid 3f1c9a2b7d4e (new: forked db, zarr/imaging)
 | Undoing a... | Does | Refused when |
 | --- | --- | --- |
 | `commit`, `pull` | Uncommits it (jj: squash into `@`; git: `reset --soft`); the pins stay. | It is no longer the working copy's parent, or (jj) other commits build on it. |
-| `new`, lazy fork, `restore` | Deletes the branches it *created*, restores the `workspace.toml` fields it changed, returns the VCS working copy if it has not moved, and deletes a bookmark `-b` made. A branch it *reset* is reported with its old head (`IRREVERSIBLE`). | A created branch gained writes, or holds a pin-less recorded state (`--discard` overrides). A `new` whose bookmark this checkout still works on, under a working copy that moved on since. |
+| `new`, lazy fork, `restore` | Deletes the branches it *created*, restores the `workspace.toml` fields it changed, returns the VCS working copy if it has not moved, and deletes a bookmark `-b` made. A branch it *reset* is reported with its old head (`IRREVERSIBLE`); one it adopted stays as it is. | A created branch gained writes, or holds a pin-less recorded state (`--discard` overrides). A `new` whose bookmark this checkout still works on, under a working copy that moved on since. |
 | `gc` | Restores forgotten working refs and deleted listings. Deleted branches and pins are `IRREVERSIBLE`. | -- |
 | `add`, `remove`, `set`, `import` | Restores the manifests; `undo add` also removes a still-empty store `--create` made. | -- |
 | `promote` | -- | Always. It prints each base branch's head before the move: tether never moves a base backwards. |
@@ -440,6 +472,23 @@ Icechunk never reuses a deleted tag's name, so a repinned pin lives under
 the next *generation* of its id (`tether.<id>.2`, `.3`, ...). The pin id and
 the manifests stay, `verify` reports `ok  pinned as tether.<id>.2`, and
 readers resolve a pin through its live generation.
+
+## `recover`
+
+`tether recover [KEY...]` is for a dataset whose repository was lost. It
+lists tether's refs in each object's store, grouped by the dataset id they
+carry: the pin count, and the bookmarks with working branches, with the
+generation where there are several. It lists other datasets' refs too
+(`gc` leaves those alone), and marks the id `tether.toml` names. Then it
+prints the next steps:
+
+- the id to set in `tether.toml`, when the refs carry one other id and
+  nothing is pinned under this dataset's yet;
+- `tether commit` on the trunk;
+- `tether new -b BOOKMARK TRUNK --adopt` and `tether commit`, per bookmark.
+
+It writes nothing, and exits 1 when a store could not be listed. The whole
+procedure: [Recovering a lost dataset repo](14-troubleshooting.qmd#recovering-a-lost-dataset-repo).
 
 ## `upgrade`
 
@@ -517,10 +566,10 @@ Experimental; see [Registries and SQL](10-registries-and-sql.qmd).
 | `pull` | `{"bookmark", "committed": {key: {"from", "to"}}, "unchanged": [keys], "skipped": {key: reason}, "vcs_commit", "pinned": {key: pin_id or null}}` |
 | `snapshot` | `{key: state}` |
 | `commit` | `{"vcs_commit": sha or null, "pinned": {key: ref or null}, "unrecoverable": [keys], "unchanged": [keys]}`; with `--dry-run`: the plan |
-| `new` | `{"bookmark", "working_refs": {key: ref}, "pending_forks": {key: ref}, "fork_points": {key: state}}`; with `--dry-run`: the plan |
+| `new` | `{"bookmark", "working_refs": {key: ref}, "pending_forks": {key: ref}, "fork_points": {key: state}, "adopted": {key: ref}}`; with `--dry-run`: the plan |
 | `promote` | `{"fast_forwarded": {key: state}, "merged": {key: state}, "skipped": [keys], "refused": {key: reason}, "held": {key: reason}, "conflicts": {key: [units]}, "kept_forks": {key: reason}, "trunk_moved": commit or null, "trunk_held": reason or null, "failed": {key: error}}`; with `--dry-run`: the plan |
 | `open` | `{"key", "read_only", "address", "type"}` |
-| `restore` | `{"from": rev, "working_refs": {key: ref}}`; with `--dry-run`: the plan |
+| `restore` | `{"from": rev or null, "at": ref or null, "working_refs": {key: ref}}`; with `--dry-run`: the plan |
 | `verify` | `{label: {"status", "message"}}` with labels `key` or `<commit12>:key` |
 | `diff` | `[{"key", "change", "why": [of "state", "pin", "locator", "policy"], "a": pin_id or null, "b": pin_id or null, "detail": ObjectDiff or null, "detail_error": str or null}]` where `ObjectDiff` is `{"summary", "unit", "added", "removed", "modified", "truncated", "note", "entries": [{"path", "change", "detail"}]}` |
 | `log` | `[{"id", "when", "message", "refs": [names]}]` |
@@ -531,6 +580,7 @@ Experimental; see [Registries and SQL](10-registries-and-sql.qmd).
 | `ops` | `[{"id", "at", "command", "plan", "result", "pre", "undoes", "undone_by", "status", "parent", "progress", "vcs_commit_gone"}]`, newest first; `parent` names the `drop` an entry is a step of |
 | `undo` | `{"undone": op id, "command", "undo_id", "restored": [str], "irreversible": [str], "skipped": [str]}` |
 | `repair` | `{"repinned": {key: pin_id}, "reforked": {key: ref}, "failed": {target: reason}, "notes": [str]}`; with `--dry-run`: the plan |
+| `recover` | `{"dataset_id", "trunk", "pinned": bool, "suggested_dataset_id": id or null, "objects": [{"key", "kind", "holds_refs": bool, "error": str or null, "datasets": [D]}], "datasets": [D], "steps": [str]}` where `D` is `{"dataset_id", "current": bool, "pins": count, "bookmarks": [{"bookmark", "branch", "generation": n or null, "branches": [refs]}]}`; the top-level `datasets` merges every object's |
 | `upgrade` | `{"from_version", "to_version", "renamed_pins": {old ref: new ref}, "renamed_branches": {old: new}, "rewritten_commits": {old id: new id}, "refingerprinted": [keys], "rewritten_manifests": [keys], "rewritten_indexes": {file: records}, "copied_listings": [names], "failed": {target: reason}, "vcs_commit"}`; with `--dry-run`: the plan |
 | plan | `{"format": 3, "command", "created_at", "context": {...}, "notes": [str], "preconditions": [{"kind", "expected", "key", "params": {...}, "detail"}], "actions": [{"op", "key", "kind", "target", "detail", "params": {...}}], "digest"}`: what `--plan FILE` writes and `--from-plan` reads. `digest` is the SHA-256 of the rest; precondition kinds are `tether.plan.PRECONDITION_KINDS`. |
 | `export` | `{"path", "format", "head", "rows": {table: count}}` |

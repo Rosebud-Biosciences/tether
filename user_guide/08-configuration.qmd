@@ -90,8 +90,17 @@ datasets can share one Icechunk repository or Neon project without deleting
 each other's pins. Datasets from before the id existed get one from
 `tether upgrade`.
 
+`tether init --dataset-id ID` (`Repo.init(dataset_id=...)`) uses the id you
+give, which must be 8 lowercase hex characters. A dataset whose repository
+was lost gets its stores' pins and branches back this way, and `tether
+recover` finds the id when you do not know it
+([Recovering a lost dataset repo](14-troubleshooting.qmd#recovering-a-lost-dataset-repo)).
+
 ::: {.callout-warning}
 ## Do not change the id after committing
+
+Before anything is pinned the id can still change; that is how `tether
+recover` takes back a lost dataset's refs. After that:
 
 - Pins and branches made under the old id stop being this dataset's: `gc`
   treats them as foreign and leaves them alone.
