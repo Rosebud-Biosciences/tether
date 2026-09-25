@@ -196,11 +196,18 @@ def _status_payload(report: StatusReport) -> dict:
 @app.command()
 def init(
     path: str = typer.Argument(".", help="Dataset root."),
+    dataset_id: str | None = typer.Option(
+        None,
+        "--dataset-id",
+        help="Use this dataset id (8 lowercase hex) instead of a fresh one. A "
+        "dataset whose repository was lost takes back the pins and working "
+        "branches its stores still hold under it; `tether recover` finds it.",
+    ),
     json_out: bool = typer.Option(False, "--json", help="Machine-readable output."),
 ) -> None:
     """Initialize a tether dataset in an existing git/jj repository."""
     try:
-        repo = Repo.init(path)
+        repo = Repo.init(path, dataset_id=dataset_id)
     except TetherError as exc:
         _fail(exc)
     if json_out:

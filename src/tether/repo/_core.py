@@ -550,6 +550,7 @@ class RepoCore:
         path: Path | str = ".",
         *,
         config: RepoConfig | None = None,
+        dataset_id: str | None = None,
     ) -> Self:
         """Initialize a dataset at `path` inside an existing git/jj repository.
 
@@ -559,19 +560,27 @@ class RepoCore:
         Args:
             path: Dataset root; created if it does not exist.
             config: Repository configuration; defaults to `RepoConfig()`.
+            dataset_id: The `[dataset] id` to use instead of a fresh one
+                (overrides `config.dataset_id`). Reusing a lost dataset's id
+                makes the pins and working branches its stores still hold
+                this dataset's again; `recover_report` finds it.
 
         Returns:
             The initialized repository.
 
         Raises:
-            ConfigError: If `tether.toml` already exists at `path`.
+            ConfigError: If `tether.toml` already exists at `path`, or the
+                dataset id is not 8 lowercase hex characters.
             VcsError: If no git or jj repository encloses `path`.
         """
+        config = config or RepoConfig()
+        if dataset_id is not None:
+            config = dataclasses.replace(config, dataset_id=dataset_id)
+        _m.check_dataset_id(config.dataset_id)
         root = Path(path).resolve()
         root.mkdir(parents=True, exist_ok=True)
         if _m.config_path(root).exists():
             raise ConfigError(f"tether already initialized at {root}")
-        config = config or RepoConfig()
         ensure_layout(root)  # writes .tether/.gitignore for every untracked file
         write_config(root, config)
         repo = cls(root, config, _open_vcs(root, config))

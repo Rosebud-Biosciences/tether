@@ -93,6 +93,20 @@ def is_dataset_id(value: object) -> bool:
     )
 
 
+def check_dataset_id(value: object) -> str:
+    """`value` as a dataset id.
+
+    Raises:
+        ConfigError: It is not 8 lowercase hex characters.
+    """
+    if not is_dataset_id(value):
+        raise ConfigError(
+            f"invalid dataset id {value!r}: {DATASET_ID_LEN} lowercase hex "
+            "characters (0-9, a-f), as in the tether.<id>.* refs a dataset makes"
+        )
+    return str(value)
+
+
 def compute_pin_id(kind: str, identity: Locator, state: State, dataset_id: str) -> str:
     """Content-address a pin: ``<dataset8>.<hash16>``.
 
