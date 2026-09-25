@@ -809,6 +809,16 @@ class ForkOps(RepoCore):
         self._note_touched(m.key, m.kind, m.locator)
         return ref
 
+    def _fork_from_state(
+        self: Repo, key: str, state: State, name: str, *, expected: State | None
+    ) -> str:
+        """Create working branch `name` for `key` from a native `state` (what
+        `restore --at` resolved), moving it only from `expected`."""
+        m = self.objects[key]
+        ref = fork_ref(self.backend_for(m.kind), m.locator, state, name, expected)
+        self._note_touched(key, m.kind, m.locator)
+        return ref
+
     def _forget_working_state(self, key: str) -> None:
         """Drop everything this workspace knows about `key`'s working branch."""
         for table in (
@@ -1002,9 +1012,15 @@ class ForkOps(RepoCore):
 
     # -- restore --------------------------------------------------------------- #
     def plan_restore(
-        self: Repo, keys: Sequence[str] | None, rev: str, *, discard: bool = False
+        self: Repo,
+        keys: Sequence[str] | None,
+        rev: str | None = None,
+        *,
+        at: str | None = None,
+        discard: bool = False,
     ) -> Plan:
-        """Compute what re-forking `keys` from the pins at `rev` would do.
+        """Compute what re-forking `keys` from the pins at `rev` -- or from
+        the native ref or state `at` -- would do.
 
         The per-object `jj restore --from REV`: the object's working branch is
         reset onto (or created from) what `rev`'s manifest pinned, while the
@@ -1014,25 +1030,41 @@ class ForkOps(RepoCore):
         state, so a moved base is a divergence, not a fast-forward. A branch
         holding unpinned writes is refused unless `discard`.
 
+        With `at` instead, each branch starts from `at` in the object's own
+        store: a branch, tag or state id, resolved as `add --at` resolves one
+        for the backend. The plan resolves it and records the state; apply
+        forks this bookmark's branch from that state, and `at` itself is
+        never moved or written -- the branch is a copy. The object reads as
+        modified against its pin until the next `commit` pins it. Refused on
+        the trunk bookmark (its working ref is the upstream branch itself)
+        and for objects that cannot fork.
+
         Args:
             keys: Objects to restore: keys, or prefixes ending in `/` (see
                 `select_keys`); `None` for every object. An empty sequence
                 is refused: a list that came out empty must not reset
                 every object's branch.
             rev: Revision whose manifests to take the pins from.
+            at: Native ref or state to start each branch from, instead of
+                `rev`.
             discard: Reset a branch even if it holds unpinned writes.
 
         Raises:
-            ConfigError: A selector matches no registered object, or `keys`
-                is empty.
+            ConfigError: A selector matches no registered object, `keys`
+                is empty, or not exactly one of `rev` and `at` is given.
         """
+        if (rev is None) == (at is None):
+            raise ConfigError(
+                "restore takes one source: a revision (--from REV) or a native "
+                "ref or state (--at REF)"
+            )
         if keys is not None and not keys:
             raise ConfigError(
                 "restore needs at least one key (keys=None restores every object)"
             )
         selected = self.select_keys(keys)
-        commit = self.vcs.resolve(rev)
-        then = self._objects_at(commit)
+        commit = self.vcs.resolve(rev) if rev is not None else None
+        then = self._objects_at(commit) if commit is not None else {}
         plan = Plan(
             command="restore",
             context={
@@ -1043,6 +1075,8 @@ class ForkOps(RepoCore):
                 "workspace_id": self.workspace.workspace_id,
             },
         )
+        if at is not None:
+            plan.context["at"] = at
         plan.require(
             "workspace_id",
             self.workspace.workspace_id,
@@ -1070,7 +1104,25 @@ class ForkOps(RepoCore):
             backend = self.backend_for(now.kind)
             eff = effective_capabilities(backend, now.locator, now.policy)
             refuse: str | None = None
-            if m is None:
+            start: State | None = None
+            if at is not None:
+                if self.on_trunk():
+                    refuse = (
+                        f"on the trunk ({self.config.trunk}) the working ref is the "
+                        "upstream branch itself, which restore never moves: restore "
+                        "on a bookmark (`tether new -b NAME`), or re-register the "
+                        "object at it (`tether add ... --at REF`), or `tether pull`"
+                    )
+                elif Capability.FORK not in eff:
+                    refuse = f"{now.kind} objects cannot fork: no working branch"
+                else:
+                    try:
+                        start = backend.fingerprint(
+                            {**self._upstream_locator(now), "at": at}, None
+                        )
+                    except TetherError as exc:
+                        refuse = f"cannot resolve {at!r} in its store: {exc}"
+            elif m is None:
                 refuse = f"not registered at {rev}"
             elif Capability.FORK not in eff or self.on_trunk():
                 refuse = "no working branch to restore (not Forkable, or on trunk)"
@@ -1081,14 +1133,19 @@ class ForkOps(RepoCore):
             if refuse is not None:
                 plan.actions.append(Action("refuse", key, now.kind, detail=refuse))
                 continue
-            assert m is not None and m.state is not None
             name = (
                 self.workspace.working_refs.get(key)
                 or self.workspace.pending_forks.get(key)
                 or self._working_ref_for(key)
             )
-            params: dict[str, Any] = {"then": m.to_toml(), "then_state": m.state}
-            detail = f"from {rev}: {m.pin.ref if m.pin else short_state(m.state)}"
+            params: dict[str, Any]
+            if start is not None:
+                params = {"at": at, "at_state": start, "then_state": start}
+                detail = f"from {at}: {short_state(start)} (a copy; {at} is untouched)"
+            else:
+                assert m is not None and m.state is not None
+                params = {"then": m.to_toml(), "then_state": m.state}
+                detail = f"from {rev}: {m.pin.ref if m.pin else short_state(m.state)}"
             # Whether the branch exists is the store's answer, not the
             # workspace's: a fork `new` deferred may have been created since
             # by a `--shared` peer or another clone writing through the same
@@ -1183,19 +1240,22 @@ class ForkOps(RepoCore):
                     detail=f"restore {key}: {name} exists since the plan was made; "
                     "re-run the plan",
                 )
-        self._close_restore_over_scopes(plan, set(selected), then, rev)
+        self._close_restore_over_scopes(
+            plan, set(selected), f"--from {rev}" if rev is not None else f"--at {at}"
+        )
         return plan
 
     def _close_restore_over_scopes(
-        self, plan: Plan, keys: set[str], then: Mapping[str, ObjectManifest], rev: str
+        self, plan: Plan, keys: set[str], source: str
     ) -> None:
         """A restore resets a native branch; every object writing through that
         branch is restored with it, whether named or not.
 
         Unnamed siblings make the plan a refusal (name them, so the plan says
-        what moves); named siblings must pin the same state of the branch at
-        `rev` (a branch is at one point), and only the first of them forks --
-        the rest `share` the reset.
+        what moves); named siblings must start the branch at the same state
+        (a branch is at one point), and only the first of them forks -- the
+        rest `share` the reset. `source` is the restore's `--from REV` or
+        `--at REF`, for the messages.
         """
 
         def scope_of(key: str) -> tuple[str, str] | None:
@@ -1234,7 +1294,7 @@ class ForkOps(RepoCore):
                         f"{a.target} is also {', '.join(unnamed)}'s working branch; "
                         f"restoring {a.key} alone would move theirs too -- name them: "
                         f"`tether restore {' '.join(sorted(keys | set(unnamed)))} "
-                        f"--from {rev}`"
+                        f"{source}`"
                     ),
                 )
                 continue
@@ -1243,9 +1303,10 @@ class ForkOps(RepoCore):
                 first_by_scope[scope] = a.key
                 continue
             first_action = forks[first]
-            mine = then.get(a.key)
-            if mine is None or not self._same(
-                a.kind, mine.state, first_action.params.get("then_state")
+            if not self._same(
+                a.kind,
+                a.params.get("then_state"),
+                first_action.params.get("then_state"),
             ):
                 plan.actions[i] = Action(
                     "refuse",
@@ -1253,8 +1314,8 @@ class ForkOps(RepoCore):
                     a.kind,
                     target=a.target,
                     detail=(
-                        f"shares {a.target} with {first!r} but pins a different "
-                        f"state of it at {rev}; a branch is at one point"
+                        f"shares {a.target} with {first!r} but starts it at a "
+                        f"different state ({source}); a branch is at one point"
                     ),
                 )
                 continue
@@ -1330,14 +1391,24 @@ class ForkOps(RepoCore):
                     ),
                     "working_refs": dict(done),
                     "from_commit": plan.context.get("from_commit"),
+                    "at": plan.context.get("at"),
                 }
 
             for a in forks:
-                m = ObjectManifest.from_toml(str(a.params["then"]))
                 try:
-                    ref = self._fork_from_manifest(
-                        m, a.target, expected=_expected_head(a.params)
-                    )
+                    if "at_state" in a.params:
+                        ref = self._fork_from_state(
+                            a.key,
+                            dict(a.params["at_state"]),
+                            a.target,
+                            expected=_expected_head(a.params),
+                        )
+                    else:
+                        ref = self._fork_from_manifest(
+                            ObjectManifest.from_toml(str(a.params["then"])),
+                            a.target,
+                            expected=_expected_head(a.params),
+                        )
                 except RefMovedError as exc:
                     # The head moved between the plan's check and this reset
                     # (a clone that shares no lock): the branches reset so far
@@ -1366,10 +1437,18 @@ class ForkOps(RepoCore):
             return done
 
     def restore(
-        self: Repo, keys: Sequence[str] | None, rev: str, *, discard: bool = False
+        self: Repo,
+        keys: Sequence[str] | None,
+        rev: str | None = None,
+        *,
+        at: str | None = None,
+        discard: bool = False,
     ) -> dict[str, str]:
-        """Re-fork `keys` from the pins at `rev` (see `plan_restore`)."""
+        """Re-fork `keys` from the pins at `rev`, or from the native ref or
+        state `at` (see `plan_restore`)."""
         # Plan and apply under one lock: planning sees the state the lock
         # refreshed, and nothing in this checkout moves in between.
         with self._writer_lock():
-            return self.apply_restore(self.plan_restore(keys, rev, discard=discard))
+            return self.apply_restore(
+                self.plan_restore(keys, rev, at=at, discard=discard)
+            )

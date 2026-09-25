@@ -1319,8 +1319,15 @@ def restore(
         help="Objects whose working branch to reset: a key, or a prefix ending "
         "in '/' (zarr/).",
     ),
-    rev: str = typer.Option(
-        ..., "--from", "-f", help="Revision whose pins to restore."
+    rev: str | None = typer.Option(
+        None, "--from", "-f", help="Revision whose pins to restore."
+    ),
+    at: str | None = typer.Option(
+        None,
+        "--at",
+        help="Instead of --from: start the branch from this native ref or state in "
+        "each object's store (a branch, tag or state id, as `add --at` takes). "
+        "The branch is a copy; REF itself is never moved or written.",
     ),
     discard: bool = typer.Option(
         False, "--discard", help="Reset even if the branch holds uncommitted writes."
@@ -1345,15 +1352,34 @@ def restore(
     the next `commit` pins what you restored -- and `promote` treats the branch
     as forked from REV. Refused if the branch holds writes you never committed,
     unless `--discard`.
+
+    `--at REF` starts the branch from a native ref or state instead, such as a
+    branch made outside tether: it is resolved when the plan is made, and the
+    bookmark's own branch is forked from that state. The object then reads as
+    modified until the next `commit` pins it. Refused on the trunk bookmark.
     """
     _refuse_preview_with_apply(dry_run, plan_out, from_plan)
     repo = _repo()
     try:
         if from_plan is not None:
             plan = _load_plan(from_plan, "restore")
+            for flag, given, planned in (
+                ("--from", rev, plan.context.get("from_rev")),
+                ("--at", at, plan.context.get("at")),
+            ):
+                if given is not None and given != planned:
+                    made = f"{flag} {planned}" if planned is not None else f"no {flag}"
+                    _fail(
+                        TetherError(
+                            f"this restore plan was made with {made}, not {flag} "
+                            f"{given}; apply it without {flag}, or re-run the plan"
+                        )
+                    )
             done = repo.apply_restore(plan)
         else:
-            plan = repo.plan_restore(keys, rev, discard=discard)
+            if (rev is None) == (at is None):
+                _fail(TetherError("restore takes --from REV or --at REF (one of them)"))
+            plan = repo.plan_restore(keys, rev, at=at, discard=discard)
             if dry_run or plan_out is not None:
                 _save_plan(repo, plan, plan_out)
                 _show_plan(plan, as_json=json_out)
@@ -1361,11 +1387,20 @@ def restore(
             done = repo.apply_restore(plan)
     except TetherError as exc:
         _fail(exc)
+    source = plan.context.get("at") or plan.context.get("from_rev")
     if json_out:
-        _emit({"from": rev, "working_refs": done}, as_json=True)
+        _emit(
+            {
+                "from": plan.context.get("from_rev"),
+                "at": plan.context.get("at"),
+                "working_refs": done,
+            },
+            as_json=True,
+        )
         return
+    copy = f"; {source} is untouched" if plan.context.get("at") else ""
     for key, ref in sorted(done.items()):
-        typer.echo(f"{key} -> {ref}  (from {rev})")
+        typer.echo(f"{key} -> {ref}  (from {source}{copy})")
 
 
 @app.command(name="forget-workspace")
