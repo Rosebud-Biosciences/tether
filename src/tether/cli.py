@@ -34,7 +34,7 @@ from tether.handles import (
     LanceHandle,
     NeonHandle,
 )
-from tether.manifest import Policy
+from tether.manifest import Policy, working_ref_generation
 from tether.plan import Plan
 from tether.repo import (
     CommitResult,
@@ -1327,6 +1327,70 @@ def repair(
             typer.secho(f"FAILED    {target}: {why}", err=True)
     if report.failed:
         raise typer.Exit(PARTIAL)
+
+
+@app.command()
+def recover(
+    keys: list[str] | None = typer.Argument(
+        None,
+        help="Only these objects: a key, or a prefix ending in '/' (zarr/); "
+        "default: every object.",
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Machine-readable output."),
+) -> None:
+    """Find what a lost dataset left in its stores, and how to take it back.
+
+    Read-only. Lists tether's refs in each registered object's store -- pins
+    `tether.<dataset>.<hash>` and working branches
+    `tether.ws.<dataset>.<bookmark>` -- by the dataset id they carry, marks
+    the one tether.toml names, and prints the steps: the id to set while
+    nothing is pinned under this one, a `commit` on the trunk, then `new -b
+    BOOKMARK TRUNK --adopt` and a `commit` per bookmark. Exit 1 if a store
+    could not be listed.
+    """
+    repo = _repo()
+    try:
+        report = repo.recover_report(keys)
+    except TetherError as exc:
+        _fail(exc)
+    failed = [o for o in report.objects if o.error is not None]
+    if json_out:
+        _emit(report.to_dict(), as_json=True)
+        if failed:
+            raise typer.Exit(1)
+        return
+    typer.echo(f"dataset id {report.dataset_id} (tether.toml)")
+    width = max((len(o.key) for o in report.objects), default=0)
+    for o in report.objects:
+        label = f"  {o.key:<{width}}  [{o.kind}]"
+        if o.error is not None:
+            typer.echo(f"{label}  error")
+            typer.secho(f"{o.key}: {o.error}", fg=typer.colors.RED, err=True)
+            continue
+        if not o.holds_refs or not o.namespaces:
+            typer.echo(f"{label}  {'makes no refs' if not o.holds_refs else 'none'}")
+            continue
+        typer.echo(label)
+        for ds in sorted(o.namespaces):
+            refs = o.namespaces[ds]
+            marks = ", ".join(
+                f"{slug} (generation {working_ref_generation(branches[-1])})"
+                if working_ref_generation(branches[-1])
+                else slug
+                for slug, branches in sorted(refs.bookmarks.items())
+            )
+            mine = " (this dataset)" if ds == report.dataset_id else ""
+            typer.echo(
+                f"    {ds}{mine}: {len(refs.pins)} pin(s); bookmarks: {marks or 'none'}"
+            )
+    typer.echo("next steps:")
+    for n, step in enumerate(report.steps, 1):
+        first, *rest = step.split("\n")
+        typer.echo(f"  {n}. {first}")
+        for line in rest:
+            typer.echo(f"       {line}")
+    if failed:
+        raise typer.Exit(1)
 
 
 @app.command()

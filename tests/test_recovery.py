@@ -628,3 +628,283 @@ def test_cli_new_adopt(
     r = runner.invoke(app, ["new", "feat", "--adopt"])
     assert r.exit_code == 0, r.output
     assert f"db -> {wref}  (adopted as it is; at snapshot_id=" in r.stdout
+
+
+# --------------------------------------------------------------------------- #
+# recover
+# --------------------------------------------------------------------------- #
+def test_recover_groups_refs_by_dataset_and_says_what_to_run(
+    vcs_root: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    lost, system, _head = _lost_bookmark(vcs_root)
+    old = lost.config.dataset_id
+    store = default_store()
+    sys = store.system(system)
+    base = sys.branches["main"]
+    sys.branches[f"tether.ws.{old}.exp"] = base
+    sys.branches[f"tether.ws.{old}.exp.2"] = base
+    sys.tags["release-1"] = base  # not tether's: not listed
+    raw = tmp_path_factory.mktemp("raw") / "plate.csv"
+    raw.write_text("a,b\n", encoding="utf-8")
+    lost.add("raw", "file", {"uri": str(raw)})
+
+    repo = _recovered(lost, tmp_path_factory, dataset_id="12345678")
+    report = repo.recover_report()
+    assert [o.key for o in report.objects] == ["db", "raw"]
+    db, raw_row = report.objects
+    assert not raw_row.holds_refs and not raw_row.namespaces
+    assert set(db.namespaces) == {old}
+    refs = db.namespaces[old]
+    assert len(refs.pins) == 2  # the trunk's and feat's
+    assert refs.bookmarks == {
+        "feat": [f"tether.ws.{old}.feat"],
+        "exp": [f"tether.ws.{old}.exp", f"tether.ws.{old}.exp.2"],
+    }
+    assert not report.pinned and report.suggested_id == old
+    assert report.steps == [
+        "set this dataset's id in tether.toml (nothing is pinned under "
+        f'12345678 yet):\n[dataset]\nid = "{old}"',
+        'tether commit -m "Recover main"',
+        'tether new -b exp main --adopt && tether commit -m "Recover exp"',
+        'tether new -b feat main --adopt && tether commit -m "Recover feat"',
+    ]
+    assert repo.recover_report(["raw"]).objects == [raw_row]
+    with pytest.raises(ConfigError, match="no such object"):
+        repo.recover_report(["nope"])
+
+    # Another dataset shares the store: grouped apart, and the id is no
+    # longer one to guess.
+    other = "fedcba98"
+    sys.tags[f"tether.{other}.00000000000000aa"] = base
+    sys.branches[f"tether.ws.{other}.side"] = base
+    report = repo.recover_report()
+    assert set(report.datasets) == {old, other}
+    assert report.datasets[other].bookmarks == {"side": [f"tether.ws.{other}.side"]}
+    assert report.suggested_id is None
+    assert f'under [dataset]:\nid = "{min(old, other)}"' in report.steps[0]
+    assert f'\nid = "{max(old, other)}"' in report.steps[0]
+    assert "per bookmark of that id" in report.steps[-1]
+
+    # Under the old id, it is this dataset's: no id to set.
+    again = _recovered(lost, tmp_path_factory)
+    report = again.recover_report(["db"])
+    assert report.steps[0] == 'tether commit -m "Recover main"'
+    assert report.to_dict()["datasets"][0] == {
+        "dataset_id": old,
+        "current": True,
+        "pins": 2,
+        "bookmarks": [
+            {
+                "bookmark": "exp",
+                "branch": f"tether.ws.{old}.exp.2",
+                "generation": 2,
+                "branches": [f"tether.ws.{old}.exp", f"tether.ws.{old}.exp.2"],
+            },
+            {
+                "bookmark": "feat",
+                "branch": f"tether.ws.{old}.feat",
+                "generation": None,
+                "branches": [f"tether.ws.{old}.feat"],
+            },
+        ],
+    }
+
+    # Once this dataset has pinned under its own id, the id stays.
+    repo.commit("pinned under the new id")
+    report = repo.recover_report(["db"])
+    assert report.pinned and report.suggested_id is None
+    assert not any("[dataset]" in step for step in report.steps)
+    last = report.steps[-1]
+    assert f"{', '.join(sorted([old, other]))} are other datasets'" in last
+    assert "can no longer change" in last and "tether init --dataset-id ID" in last
+
+
+def test_cli_recover(
+    vcs_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    lost, _system, _head = _lost_bookmark(vcs_root)
+    old = lost.config.dataset_id
+    gone = _mem(lost, "gone")
+    repo = _recovered(lost, tmp_path_factory, dataset_id="12345678")
+    monkeypatch.chdir(repo.root)
+
+    r = runner.invoke(app, ["recover", "db"])
+    assert r.exit_code == 0, r.output
+    assert "dataset id 12345678 (tether.toml)" in r.stdout
+    assert f"{old}: 2 pin(s); bookmarks: feat" in r.stdout
+    assert "(this dataset)" not in r.stdout
+    assert f'       id = "{old}"' in r.stdout
+    assert "tether new -b feat main --adopt" in r.stdout
+
+    r = runner.invoke(app, ["recover", "--json"])
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.stdout)
+    assert set(payload) == {
+        "dataset_id",
+        "trunk",
+        "pinned",
+        "suggested_dataset_id",
+        "objects",
+        "datasets",
+        "steps",
+    }
+    assert payload["suggested_dataset_id"] == old
+    rows = {o["key"]: o for o in payload["objects"]}
+    assert rows["gone"] == {
+        "key": "gone",
+        "kind": "memory",
+        "holds_refs": True,
+        "error": None,
+        "datasets": [],
+    }
+    (found,) = rows["db"]["datasets"]
+    assert found["dataset_id"] == old and not found["current"]
+
+    # A store that cannot be listed is an error row, and exit 1.
+    default_store().deleted.add(gone)
+    try:
+        r = runner.invoke(app, ["recover"])
+        assert r.exit_code == 1 and "gone: " in r.stderr, r.output
+        assert "gone  [memory]  error" in r.stdout
+    finally:
+        default_store().deleted.discard(gone)
+
+
+def test_recover_suggests_nothing_while_a_store_cannot_be_listed(
+    vcs_root: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Steps drawn from a partial listing mislead: with every store failing
+    they said there was nothing to take back, and with some failing they
+    could name the wrong id or miss bookmarks. Until every selected store
+    lists, the only step is to fix access or leave those objects out."""
+    lost, _system, _head = _lost_bookmark(vcs_root)
+    gone = _mem(lost, "gone")
+    repo = _recovered(lost, tmp_path_factory, dataset_id="12345678")
+    default_store().deleted.add(gone)
+    try:
+        for keys in (["gone"], None):  # every selected store failing; one of two
+            report = repo.recover_report(keys)
+            assert [o.key for o in report.objects if o.error] == ["gone"]
+            assert report.suggested_id is None
+            (step,) = report.steps
+            assert step.startswith("could not list the refs of gone")
+            assert "no tether refs" not in step and "commit" not in step
+    finally:
+        default_store().deleted.discard(gone)
+    assert repo.recover_report().suggested_id == lost.config.dataset_id
+
+
+# --------------------------------------------------------------------------- #
+# End to end: the repository is lost, the stores are not
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("kind", ["memory", "icechunk"])
+def test_recover_a_lost_dataset_end_to_end(
+    vcs_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+    kind: str,
+) -> None:
+    store = default_store()
+    if kind == "icechunk":
+        _icechunk()
+        uri = _ic_new(tmp_path_factory.mktemp("stores") / "imaging.icechunk")
+        key, add = "imaging", [uri, "--kind", "icechunk"]
+
+        def write(branch: str, value: int) -> None:
+            _ic_write(uri, branch, value)
+
+        def head(branch: str) -> str:
+            return str(_ic_open(uri).lookup_branch(branch))
+
+        def tags() -> set[str]:
+            return set(_ic_open(uri).list_tags())
+
+        def read(branch: str) -> Any:
+            return _ic_read(uri, branch)
+    else:
+        system = f"sys-{uuid.uuid4().hex[:8]}"
+        store.system(system)
+        key, add = "db", ["db", "--kind", "memory", "--set", f"system={system}"]
+
+        def write(branch: str, value: int) -> None:
+            store.write(system, branch, {"v": value})
+
+        def head(branch: str) -> str:
+            return store.system(system).branches[branch]
+
+        def tags() -> set[str]:
+            return set(store.system(system).tags)
+
+        def read(branch: str) -> Any:
+            return store.read(system, branch)["v"]
+
+    # The dataset as it was: a trunk commit, and a bookmark with a committed
+    # write and an uncommitted one on top.
+    monkeypatch.chdir(vcs_root)
+    assert runner.invoke(app, ["init"]).exit_code == 0
+    assert runner.invoke(app, ["add", *add]).exit_code == 0
+    write("main", 1)
+    assert runner.invoke(app, ["commit", "-m", "baseline"]).exit_code == 0
+    assert runner.invoke(app, ["new", "-b", "feat", "--eager"]).exit_code == 0
+    lost = Repo.find(vcs_root)
+    old, wref = lost.config.dataset_id, lost.workspace.working_refs[key]
+    write(wref, 2)
+    assert runner.invoke(app, ["commit", "-m", "feat: 2"]).exit_code == 0
+    feat_pin = Repo.find(vcs_root).objects[key].pin
+    assert feat_pin is not None
+    write(wref, 3)  # never committed
+    uncommitted = head(wref)
+    before = tags()
+
+    # The repository is lost; a fresh one elsewhere, the old id, the object.
+    root = tmp_path_factory.mktemp("recovered")
+    if lost.vcs.kind == "git":
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+    else:
+        subprocess.run(["jj", "git", "init"], cwd=root, check=True, capture_output=True)
+    monkeypatch.chdir(root)
+    r = runner.invoke(app, ["init", "--dataset-id", old])
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(app, ["add", *add])
+    assert r.exit_code == 0 and f"added {key}" in r.stdout, r.output
+
+    r = runner.invoke(app, ["recover", "--json"])
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.stdout)
+    (found,) = payload["datasets"]
+    assert found["dataset_id"] == old and found["current"] and found["pins"] == 2
+    assert [b["bookmark"] for b in found["bookmarks"]] == ["feat"]
+    assert payload["steps"] == [
+        'tether commit -m "Recover main"',
+        'tether new -b feat main --adopt && tether commit -m "Recover feat"',
+    ]
+
+    # The trunk re-commits the state it pinned: the tag is reused, none made.
+    res = Repo.find(root).commit("Recover main")
+    pin = res.pinned[key]
+    assert pin is not None and not pin.created
+    assert tags() == before
+
+    r = runner.invoke(app, ["new", "-b", "feat", "main", "--adopt"])
+    assert r.exit_code == 0, r.output
+    assert f"{key} -> {wref}  (adopted as it is;" in r.stdout
+    assert head(wref) == uncommitted and read(wref) == 3  # the write survived
+    r = runner.invoke(app, ["status", "--json"])
+    (row,) = json.loads(r.stdout)["objects"]
+    assert row["state"] == "modified"
+    res = Repo.find(root).commit("Recover feat")
+    pin = res.pinned[key]
+    assert pin is not None and pin.created
+    assert tags() - before == {pin.ref}
+    repo = Repo.find(root)
+    assert (repo.objects[key].state or {}).get("snapshot_id") == uncommitted
+    assert _state(repo, key) == "clean"
+
+    # What the lost history pinned on the bookmark is no manifest's now: kept,
+    # since this clone did not make it, until `gc --release-foreign`.
+    kept = [a for a in repo.plan_gc().actions if a.op == "keep-pin"]
+    assert [a.params["pin_id"] for a in kept] == [feat_pin.id]
+    released = repo.plan_gc(release_foreign=True).actions
+    assert [a.params["pin_id"] for a in released if a.op == "unpin"] == [feat_pin.id]

@@ -14,6 +14,7 @@ from tether.repo._fork import ForkOps
 from tether.repo._gc import GcOps, GcScope
 from tether.repo._objects import ObjectOps
 from tether.repo._promote import PromoteOps
+from tether.repo._recover import RecoverOps
 from tether.repo._reports import (
     AbandonReport,
     CommitResult,
@@ -24,6 +25,9 @@ from tether.repo._reports import (
     ObjectStatus,
     PromoteReport,
     PullReport,
+    RecoveredObject,
+    RecoveredRefs,
+    RecoverReport,
     RepairReport,
     SetReport,
     StatusReport,
@@ -45,6 +49,9 @@ __all__ = [
     "ObjectStatus",
     "PromoteReport",
     "PullReport",
+    "RecoverReport",
+    "RecoveredObject",
+    "RecoveredRefs",
     "RepairReport",
     "Repo",
     "SetReport",
@@ -55,7 +62,16 @@ __all__ = [
 ]
 
 
-class Repo(ObjectOps, CommitOps, ForkOps, PromoteOps, GcOps, UndoOps, RepoCore):
+class Repo(
+    ObjectOps,
+    CommitOps,
+    ForkOps,
+    PromoteOps,
+    GcOps,
+    UndoOps,
+    RecoverOps,
+    RepoCore,
+):
     """A tether dataset: manifests in a VCS working tree plus the systems they name.
 
     Construct with `Repo.init` (new dataset) or `Repo.find` (existing one).

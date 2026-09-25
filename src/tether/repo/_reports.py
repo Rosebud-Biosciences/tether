@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from tether.backends.base import ObjectDiff, Tier, VerifyReport
-from tether.manifest import Pin, State
+from tether.manifest import Pin, State, working_ref_generation
 from tether.oplog import OpEntry
 from tether.plan import Action, Plan
 
@@ -356,6 +356,112 @@ class DiffEntry:
     """For `changed`: which of `state`, `pin`, `locator`, `policy` differ. A
     locator or policy change alone is a change too -- the object is addressed
     or governed differently even though its state is the same."""
+
+
+@dataclass
+class RecoveredRefs:
+    """The refs a store holds under one dataset id (see `RecoverReport`)."""
+
+    dataset_id: str
+    """The dataset id the refs are named for."""
+    pins: set[str] = field(default_factory=set)
+    """Pin ids (`<dataset>.<hash>`)."""
+    bookmarks: dict[str, list[str]] = field(default_factory=dict)
+    """Bookmark, as its ref names it (`bookmark_slug`) -> its working
+    branches, lowest generation first: the last is what `new --adopt` takes."""
+
+    def merge(self, other: RecoveredRefs) -> None:
+        self.pins |= other.pins
+        for slug, refs in other.bookmarks.items():
+            mine = self.bookmarks.setdefault(slug, [])
+            mine.extend(r for r in refs if r not in mine)
+            mine.sort(key=lambda ref: working_ref_generation(ref) or 1)
+
+    def to_dict(self, current: str) -> dict[str, Any]:
+        return {
+            "dataset_id": self.dataset_id,
+            "current": self.dataset_id == current,
+            "pins": len(self.pins),
+            "bookmarks": [
+                {
+                    "bookmark": slug,
+                    "branch": refs[-1],
+                    "generation": working_ref_generation(refs[-1]),
+                    "branches": list(refs),
+                }
+                for slug, refs in sorted(self.bookmarks.items())
+            ],
+        }
+
+
+@dataclass
+class RecoveredObject:
+    """One object's row in a `RecoverReport`."""
+
+    key: str
+    """Object key."""
+    kind: str
+    """Backend kind."""
+    namespaces: dict[str, RecoveredRefs] = field(default_factory=dict)
+    """Dataset id -> what the object's store holds under it."""
+    holds_refs: bool = True
+    """Whether the kind makes refs at all (`PIN` or `FORK`); a file or Delta
+    object has none to find."""
+    error: str | None = None
+    """Why the store's refs could not be listed, if they could not."""
+
+    def to_dict(self, current: str) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "kind": self.kind,
+            "holds_refs": self.holds_refs,
+            "error": self.error,
+            "datasets": [
+                self.namespaces[ds].to_dict(current) for ds in sorted(self.namespaces)
+            ],
+        }
+
+
+@dataclass
+class RecoverReport:
+    """What `Repo.recover_report` found: tether's refs in each object's store,
+    by the dataset id they carry, and what to run to take them back."""
+
+    dataset_id: str
+    """This dataset's id (`tether.toml`)."""
+    trunk: str
+    """The trunk bookmark (`[vcs] trunk`)."""
+    objects: list[RecoveredObject] = field(default_factory=list)
+    """Per object, sorted by key."""
+    pinned: bool = False
+    """Whether this dataset has pinned anything under its id already: a
+    manifest names a pin, or a store holds one. Its id cannot change then."""
+    suggested_id: str | None = None
+    """The one other dataset id the stores hold refs for, to set in
+    `tether.toml` while nothing is pinned under this one yet."""
+    steps: list[str] = field(default_factory=list)
+    """The commands to run, in order."""
+
+    @property
+    def datasets(self) -> dict[str, RecoveredRefs]:
+        """Dataset id -> what every selected store holds under it, merged."""
+        out: dict[str, RecoveredRefs] = {}
+        for o in self.objects:
+            for ds, refs in o.namespaces.items():
+                out.setdefault(ds, RecoveredRefs(ds)).merge(refs)
+        return out
+
+    def to_dict(self) -> dict[str, Any]:
+        found = self.datasets
+        return {
+            "dataset_id": self.dataset_id,
+            "trunk": self.trunk,
+            "pinned": self.pinned,
+            "suggested_dataset_id": self.suggested_id,
+            "objects": [o.to_dict(self.dataset_id) for o in self.objects],
+            "datasets": [found[ds].to_dict(self.dataset_id) for ds in sorted(found)],
+            "steps": list(self.steps),
+        }
 
 
 def _source_object(source: Mapping[str, Any]) -> str | Pin | State:
