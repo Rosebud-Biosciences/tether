@@ -430,6 +430,7 @@ class ObjectOps(RepoCore):
 
     def snapshot(
         self,
+        keys: Sequence[str] | None = None,
         *,
         upstream: bool = True,
         failures: dict[str, Exception] | None = None,
@@ -444,6 +445,9 @@ class ObjectOps(RepoCore):
         stored in `workspace.last_snapshot`.
 
         Args:
+            keys: Only these objects (keys, or prefixes ending in `/`; see
+                `select_keys`); default: every object. The others are not
+                contacted and their cached states stay as they are.
             upstream: Contact the upstream branch of objects without a working
                 ref.
             failures: Collect each object whose fingerprint failed here, and
@@ -454,6 +458,7 @@ class ObjectOps(RepoCore):
             Current state per object key.
 
         Raises:
+            ConfigError: A selector in `keys` matches no object.
             ImmutableObjectModified: An Observed object with `policy.file ==
                 "immutable"` changed since it was committed.
             MultiObjectError: One or more fingerprints failed (without
@@ -467,6 +472,7 @@ class ObjectOps(RepoCore):
         # another's name. Read-only as far as the lock is concerned: what it
         # writes is this checkout's own cache, so it works without `fcntl`.
         with self._writer_lock(readonly=True):
+            wanted = self._selection(keys)
             moving = set(self.moving_keys())
             # Upstream only means something where the position *could* follow
             # it: on the trunk (or on no bookmark). A feature bookmark forked
@@ -475,7 +481,11 @@ class ObjectOps(RepoCore):
             ask_upstream = upstream and (
                 self.on_trunk() or self.workspace.bookmark is None
             )
-            keys = list(self.objects) if ask_upstream else sorted(moving)
+            read = [
+                key
+                for key in (list(self.objects) if ask_upstream else sorted(moving))
+                if wanted is None or key in wanted
+            ]
 
             def fp(key: str) -> State:
                 m = self.objects[key]
@@ -485,10 +495,12 @@ class ObjectOps(RepoCore):
                     return backend.fingerprint(self._upstream_locator(m), None)
                 return backend.fingerprint(m.locator, ref)
 
-            states, errors = self._fanout_collect(fp, keys)
+            states, errors = self._fanout_collect(fp, read)
             if failures is not None:
                 failures.update(errors)
             for key, m in self.objects.items():
+                if wanted is not None and key not in wanted:
+                    continue
                 if key not in states and key not in errors and m.state is not None:
                     states[key] = dict(m.state)
             self._enforce_immutability(states)
@@ -501,7 +513,7 @@ class ObjectOps(RepoCore):
                 for k, v in self.workspace.last_snapshot.items()
                 if k in self.objects
             }
-            for key in keys:  # fingerprinted now
+            for key in read:  # fingerprinted now
                 if key in states:
                     cached[key] = states[key]
             for key, state in states.items():  # positions: only where unknown
@@ -512,7 +524,7 @@ class ObjectOps(RepoCore):
             failed = {
                 k: v
                 for k, v in self.workspace.last_snapshot_errors.items()
-                if k in self.objects and k not in keys
+                if k in self.objects and k not in read
             }
             for key, exc in errors.items():
                 cached.pop(key, None)
@@ -560,7 +572,9 @@ class ObjectOps(RepoCore):
                     kind=m.kind,
                 )
 
-    def status(self, *, do_snapshot: bool = True) -> StatusReport:
+    def status(
+        self, keys: Sequence[str] | None = None, *, do_snapshot: bool = True
+    ) -> StatusReport:
         """Classify every object against its committed manifest.
 
         Objects with a working ref compare the branch head to the committed
@@ -569,6 +583,9 @@ class ObjectOps(RepoCore):
         takes it), else `clean`.
 
         Args:
+            keys: Only these objects (keys, or prefixes ending in `/`; see
+                `select_keys`); default: every object. Only they are
+                contacted and reported, `stale_keys` included.
             do_snapshot: Take a fresh `snapshot` first; otherwise reuse the
                 cached one (no external systems are contacted) and report its
                 age -- including which objects it could not read, as
@@ -576,20 +593,27 @@ class ObjectOps(RepoCore):
 
         Returns:
             The report; `objects` are sorted by key.
+
+        Raises:
+            ConfigError: A selector in `keys` matches no object.
         """
         cached_errors = {
             key: error
-            for key in self.objects
+            for key in self.select_keys(keys)
             if (error := self._cached_error(key)) is not None
         }
         fresh = do_snapshot or not (self.workspace.last_snapshot or cached_errors)
         failures: dict[str, Exception] = {}
         states = (
-            self.snapshot(failures=failures) if fresh else self.workspace.last_snapshot
+            self.snapshot(keys, failures=failures)
+            if fresh
+            else self.workspace.last_snapshot
         )
         moving = set(self.moving_keys())
         objects: list[ObjectStatus] = []
-        for key in sorted(self.objects):
+        # Selected again: the snapshot re-read the manifests.
+        selected = self.select_keys(keys)
+        for key in selected:
             m = self.objects[key]
             backend = self.backend_for(m.kind)
             eff = effective_capabilities(backend, m.locator, m.policy)
@@ -630,7 +654,8 @@ class ObjectOps(RepoCore):
                     ),
                 )
             )
-        stale = self.stale_keys()
+        chosen = set(selected)
+        stale = [key for key in self.stale_keys() if key in chosen]
         return StatusReport(
             manifest_hash=self.current_manifest_hash(),
             stale=bool(stale),
@@ -880,6 +905,7 @@ class ObjectOps(RepoCore):
     # -- verify ---------------------------------------------------------------- #
     def verify(
         self,
+        keys: Sequence[str] | None = None,
         *,
         rev: str | None = None,
         deep: bool = False,
@@ -888,6 +914,10 @@ class ObjectOps(RepoCore):
         """Check that recorded states and pins still resolve.
 
         Args:
+            keys: Only these objects (keys, or prefixes ending in `/`; see
+                `select_keys`), selected from the manifests being verified --
+                with `all_history`, from every key history has had; default:
+                every object.
             rev: Verify the manifests at this revision instead of the working tree.
             deep: Actually open recorded states instead of the cheap check
                 (turns `UNKNOWN` into `OK` / `MISSING`).
@@ -900,14 +930,23 @@ class ObjectOps(RepoCore):
         Returns:
             A `VerifyReport` per label (object key, or commit-prefixed key).
             Backend `TetherError`s are reported as `UNKNOWN`.
+
+        Raises:
+            ConfigError: A selector in `keys` matches no object.
         """
         if all_history:
-            return self._verify_all_history(deep)
+            return self._verify_all_history(deep, keys)
         objects = (
             self._objects_at(self.vcs.resolve(rev)) if rev is not None else self.objects
         )
+        wanted = self._selection(keys, among=objects)
         return self._verify_manifests(
-            {key: m for key, m in objects.items() if m.state is not None}, deep
+            {
+                key: m
+                for key, m in objects.items()
+                if m.state is not None and (wanted is None or key in wanted)
+            },
+            deep,
         )
 
     def _verify_manifests(
@@ -957,16 +996,28 @@ class ObjectOps(RepoCore):
         # Preserve the caller's label order.
         return {label: reports[label] for label in targets}
 
-    def _verify_all_history(self, deep: bool) -> dict[str, VerifyReport]:
-        targets: dict[str, ObjectManifest] = {}
+    def _verify_all_history(
+        self, deep: bool, keys: Sequence[str] | None = None
+    ) -> dict[str, VerifyReport]:
+        targets: dict[str, tuple[str, ObjectManifest]] = {}
+        seen = set(self.objects)
         for rev, objects in self._iter_history_objects():
             for key, m in objects.items():
+                seen.add(key)
                 # Pinned states and recorded (Addressable / pin=record) states
                 # are both promises; Observed records are not recoverable.
                 if m.state is None or (m.pin is None and not m.recoverable):
                     continue
-                targets[f"{rev[:12]}:{key}"] = m
-        return self._verify_manifests(targets, deep)
+                targets[f"{rev[:12]}:{key}"] = (key, m)
+        wanted = self._selection(keys, among=seen)
+        return self._verify_manifests(
+            {
+                label: m
+                for label, (key, m) in targets.items()
+                if wanted is None or key in wanted
+            },
+            deep,
+        )
 
     # -- diff ------------------------------------------------------------------ #
     def diff(
@@ -974,15 +1025,19 @@ class ObjectOps(RepoCore):
         rev_a: str | None = None,
         rev_b: str | None = None,
         *,
+        keys: Sequence[str] | None = None,
         content: bool = False,
     ) -> list[DiffEntry]:
         """Object-level manifest diff; with ``content`` also what changed inside.
 
         Content diffs run concurrently for every ``changed`` object whose backend
         declares ``DIFF``; per-object failures land in ``detail_error`` rather
-        than aborting the whole diff.
+        than aborting the whole diff. ``keys`` (keys, or prefixes ending in
+        ``/``; see `select_keys`) limits the diff to those objects, selected
+        from both sides.
 
         Raises:
+            ConfigError: A selector in ``keys`` matches no object on either side.
             VcsError: A revision is not exactly one commit -- with none given,
                 a jj working copy with several parents (a merge): name the
                 parent to compare with.
@@ -1017,7 +1072,10 @@ class ObjectOps(RepoCore):
             b = self.objects  # `diff REV`: that revision -> the working tree
 
         entries: list[DiffEntry] = []
+        wanted = self._selection(keys, among=set(a) | set(b))
         for key in sorted(set(a) | set(b)):
+            if wanted is not None and key not in wanted:
+                continue
             ma = a.get(key)
             mb = b.get(key)
             pa = ma.pin.id if ma and ma.pin else None

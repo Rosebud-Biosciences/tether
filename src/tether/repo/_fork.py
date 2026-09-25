@@ -1002,7 +1002,7 @@ class ForkOps(RepoCore):
 
     # -- restore --------------------------------------------------------------- #
     def plan_restore(
-        self: Repo, keys: Sequence[str], rev: str, *, discard: bool = False
+        self: Repo, keys: Sequence[str] | None, rev: str, *, discard: bool = False
     ) -> Plan:
         """Compute what re-forking `keys` from the pins at `rev` would do.
 
@@ -1015,13 +1015,22 @@ class ForkOps(RepoCore):
         holding unpinned writes is refused unless `discard`.
 
         Args:
-            keys: Objects to restore.
+            keys: Objects to restore: keys, or prefixes ending in `/` (see
+                `select_keys`); `None` for every object. An empty sequence
+                is refused: a list that came out empty must not reset
+                every object's branch.
             rev: Revision whose manifests to take the pins from.
             discard: Reset a branch even if it holds unpinned writes.
 
         Raises:
-            ConfigError: A key is not registered.
+            ConfigError: A selector matches no registered object, or `keys`
+                is empty.
         """
+        if keys is not None and not keys:
+            raise ConfigError(
+                "restore needs at least one key (keys=None restores every object)"
+            )
+        selected = self.select_keys(keys)
         commit = self.vcs.resolve(rev)
         then = self._objects_at(commit)
         plan = Plan(
@@ -1055,10 +1064,8 @@ class ForkOps(RepoCore):
             plan.context["manifest_hash"],
             detail="manifests changed since the plan was made; re-run the plan",
         )
-        for key in keys:
-            now = self.objects.get(key)
-            if now is None:
-                raise ConfigError(f"no such object: {key}")
+        for key in selected:
+            now = self.objects[key]
             m = then.get(key)
             backend = self.backend_for(now.kind)
             eff = effective_capabilities(backend, now.locator, now.policy)
@@ -1176,7 +1183,7 @@ class ForkOps(RepoCore):
                     detail=f"restore {key}: {name} exists since the plan was made; "
                     "re-run the plan",
                 )
-        self._close_restore_over_scopes(plan, set(keys), then, rev)
+        self._close_restore_over_scopes(plan, set(selected), then, rev)
         return plan
 
     def _close_restore_over_scopes(
@@ -1359,7 +1366,7 @@ class ForkOps(RepoCore):
             return done
 
     def restore(
-        self: Repo, keys: Sequence[str], rev: str, *, discard: bool = False
+        self: Repo, keys: Sequence[str] | None, rev: str, *, discard: bool = False
     ) -> dict[str, str]:
         """Re-fork `keys` from the pins at `rev` (see `plan_restore`)."""
         # Plan and apply under one lock: planning sees the state the lock

@@ -631,6 +631,61 @@ class RepoCore:
         config = read_config(root)
         return cls(root, config, _open_vcs(root, config), allow_outdated=allow_outdated)
 
+    # -- selection ------------------------------------------------------------- #
+    def select_keys(
+        self,
+        selectors: Sequence[str] | None,
+        *,
+        among: Iterable[str] | None = None,
+    ) -> list[str]:
+        """The object keys `selectors` name, sorted and de-duplicated.
+
+        A selector is an exact key, or a prefix ending in `/`: `zarr/` names
+        every key under `zarr/`. A key never ends in `/`, so the two cannot
+        be confused. No selectors (`None` or empty) names every object. Every
+        command that takes keys selects through this.
+
+        Args:
+            selectors: Keys and prefixes; `None` or empty for all.
+            among: The keys to select from (default: the registered objects);
+                `verify --rev` selects from that revision's manifests, `diff`
+                from both sides.
+
+        Raises:
+            ConfigError: A selector matches nothing; the message names each one.
+        """
+        universe = sorted(set(self.objects if among is None else among))
+        if not selectors:
+            return universe
+        present = set(universe)
+        chosen: set[str] = set()
+        unknown: list[str] = []
+        empty: list[str] = []
+        for selector in dict.fromkeys(selectors):
+            if selector.endswith("/"):
+                hits = {k for k in universe if k.startswith(selector)}
+                if not hits:
+                    empty.append(selector)
+            else:
+                hits = {selector} & present
+                if not hits:
+                    unknown.append(selector)
+            chosen |= hits
+        if unknown or empty:
+            why = [f"no such object: {', '.join(unknown)}"] if unknown else []
+            if empty:
+                why.append(f"no object under {', '.join(empty)}")
+            raise ConfigError("; ".join(why))
+        return sorted(chosen)
+
+    def _selection(
+        self, selectors: Sequence[str] | None, *, among: Iterable[str] | None = None
+    ) -> set[str] | None:
+        """`select_keys` as a filter: `None` (keep everything) without selectors."""
+        if not selectors:
+            return None
+        return set(self.select_keys(selectors, among=among))
+
     # -- internals ------------------------------------------------------------- #
     def backend_for(self, kind: str) -> ObjectBackend:
         """Return the (cached) backend instance for `kind`.

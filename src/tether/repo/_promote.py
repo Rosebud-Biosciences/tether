@@ -82,7 +82,9 @@ class PromoteOps(RepoCore):
         - otherwise: `refuse`, with the system's own recipe in the detail
 
         Args:
-            keys: Objects to consider (default: all Forkable ones).
+            keys: Objects to consider: keys, or prefixes ending in `/` (see
+                `select_keys`), at `rev` when given; default: all Forkable
+                ones.
             rev: Promote the states pinned at this dataset commit instead of the
                 working branches.
             strategy: `auto` (table above), `ff` (refuse anything that is not a
@@ -90,17 +92,14 @@ class PromoteOps(RepoCore):
             message: Merge commit message for backends that record one.
 
         Raises:
-            ConfigError: Unknown key or strategy.
+            ConfigError: A selector matches no object, or an unknown strategy.
         """
         if strategy not in ("auto", "ff", "merge"):
             raise ConfigError(
                 f"unknown promote strategy {strategy!r} (auto, ff, merge)"
             )
         objects = self._objects_at(self.vcs.resolve(rev)) if rev else self.objects
-        selected = list(keys) if keys else sorted(objects)
-        for key in selected:
-            if key not in objects:
-                raise ConfigError(f"no such object: {key}")
+        selected = self.select_keys(keys, among=objects)
         message = message or f"tether promote {rev or self.workspace.workspace_id[:8]}"
         bookmark = self.workspace.bookmark
         marks = self.vcs.bookmarks()

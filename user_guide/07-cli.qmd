@@ -17,8 +17,8 @@ tether backends [--json]
 tether add [KEY] [LOCATOR] --kind KIND [--branch BRANCH] [--at STATE | --pick] [locator options] [--set k=v]... [--file immutable|versioned] [--pin native|record] [--create]
 tether set KEY... | --all [--file immutable|versioned] [--pin native|record]
 tether remove KEY
-tether status [--snapshot | --no-snapshot]
-tether snapshot
+tether status [KEY...] [--snapshot | --no-snapshot]
+tether snapshot [KEY...]
 tether pull [BOOKMARK] [-m MESSAGE]
 tether commit -m MESSAGE [--no-vcs] [--strict] [--force] [--no-snapshot] [--dry-run | --plan FILE]
 tether commit --from-plan FILE [-m MESSAGE] [--no-vcs]
@@ -26,8 +26,8 @@ tether new [REV] [-b NAME] [--shared] [--keep] [--eager | --lazy] [--discard] [-
 tether open KEY [-r REV] [--read-only | --writable] [--with-password]
 tether restore KEY... --from REV [--discard] [--dry-run | --plan FILE | --from-plan FILE]
 tether promote [KEY]... [-r REV] [--strategy auto|ff|merge] [-m MESSAGE] [--dry-run | --plan FILE | --from-plan FILE]
-tether verify [-r REV] [--all-history] [--deep]
-tether diff [REV_A] [REV_B] [--content] [--limit N]
+tether verify [KEY...] [-r REV] [--all-history] [--deep]
+tether diff [REV_A] [REV_B] [--key KEY]... [--content] [--limit N]
 tether log KEY [--ref REF] [-n N]            # or: tether log LOCATOR --kind KIND [--branch B] [--set k=v]
 tether gc [--dry-run | --no-dry-run] [--release-foreign] [--prune-bookmarks [--keep-bookmark NAME]... [--force-prune]] [--delete-stores] [--store KIND=LOCATOR]... [--plan FILE | --from-plan FILE]
 tether abandon REV... [--gc]
@@ -73,6 +73,23 @@ any other revision gives a read-only working copy. Under git that commit is
 checked out on a `tether/<rev12>` branch, so dataset commits made there stay
 reachable; a detached HEAD would let `gc` treat them as gone. tether never
 deletes these parking branches: `git branch -d` the ones you are done with.
+
+## Selecting objects
+
+`KEY...`, and the repeatable `--key` of `diff`, name objects in two ways:
+an exact key (`zarr/imaging`), or a prefix ending in `/` (`zarr/` is every
+key under `zarr/`, but not `zarrish`). Selectors may overlap, and each
+object counts once. A selector that matches nothing is an error that names
+it. Naming none means every object.
+
+`status`, `snapshot`, `verify` and `diff` then contact and report only the
+objects named, with the same exit codes and JSON shapes: `status` exits 1
+only for an `error` among them, and `snapshot` leaves the cached states of
+the rest as they were. `verify --rev` and `diff` select from the manifests
+they read, so a key only one side of a `diff` has can be named.
+`verify --all-history` selects from every key history has had. `restore`
+and `promote` select the same way. In Python, `Repo.select_keys` resolves
+selectors, and these methods take them as `keys=`.
 
 ## Versions and environment
 

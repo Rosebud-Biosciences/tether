@@ -11,6 +11,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `tether add LOCATOR --kind KIND` (and `Repo.add(None, ...)`) takes the key
   from the locator's last segment, less the store suffix, for file, icechunk,
   lance, delta and git objects. Other kinds still need a key.
+- `status`, `snapshot` and `verify` take `KEY...`, and `diff` a repeatable
+  `--key`: an exact key or a prefix ending in `/` (`zarr/`). Only those
+  objects are contacted and reported. In Python it is `keys=` on each
+  method, and `Repo.select_keys`, which `promote` and `restore` now use too.
 
 ### Fixed
 

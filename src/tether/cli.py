@@ -627,6 +627,11 @@ def pull(
 
 @app.command()
 def status(
+    keys: list[str] | None = typer.Argument(
+        None,
+        help="Objects to report: a key, or a prefix ending in '/' (zarr/); "
+        "default: every object.",
+    ),
     snapshot: bool | None = typer.Option(
         None,
         "--snapshot/--no-snapshot",
@@ -645,10 +650,11 @@ def status(
     Labels: new (never committed), modified, clean, error (its store could not
     be read, now or by the last snapshot; exit 1). `(STALE)` means the
     committed state changed since this workspace forked; run `tether new`.
+    KEY... limits all of it to those objects: only they are contacted.
     """
     repo = _repo()
     try:
-        report = repo.status(do_snapshot=_want_snapshot(repo, snapshot))
+        report = repo.status(keys, do_snapshot=_want_snapshot(repo, snapshot))
     except TetherError as exc:
         _fail(exc)
     failed = [o for o in report.objects if o.error is not None]
@@ -688,12 +694,20 @@ def status(
 
 @app.command()
 def snapshot(
+    keys: list[str] | None = typer.Argument(
+        None,
+        help="Objects to fingerprint: a key, or a prefix ending in '/' (zarr/); "
+        "default: every object.",
+    ),
     json_out: bool = typer.Option(False, "--json", help="Machine-readable output."),
 ) -> None:
-    """Fingerprint every object and cache the result in the workspace."""
+    """Fingerprint every object (or KEY...) and cache the result in the workspace.
+
+    The cached states of objects not named stay as they were.
+    """
     repo = _repo()
     try:
-        states = repo.snapshot()
+        states = repo.snapshot(keys)
     except TetherError as exc:
         _fail(exc)
     if json_out:
@@ -996,6 +1010,11 @@ def open_(
 
 @app.command()
 def verify(
+    keys: list[str] | None = typer.Argument(
+        None,
+        help="Objects to verify: a key, or a prefix ending in '/' (zarr/); "
+        "default: every object.",
+    ),
     rev: str | None = typer.Option(
         None, "-r", "--rev", help="Verify the manifests at this revision."
     ),
@@ -1010,11 +1029,12 @@ def verify(
     """Check that recorded states and pins still resolve.
 
     Reports ok, drifted, missing, or unknown per object; exits 1 if anything
-    is not ok.
+    is not ok. KEY... verifies only those objects (with --all-history, at
+    every commit that has them).
     """
     repo = _repo()
     try:
-        reports = repo.verify(rev=rev, deep=deep, all_history=all_history)
+        reports = repo.verify(keys, rev=rev, deep=deep, all_history=all_history)
     except TetherError as exc:
         _fail(exc)
     if json_out:
@@ -1043,6 +1063,12 @@ def diff(
     rev_b: str | None = typer.Argument(
         None, help="To revision (default: working tree)."
     ),
+    keys: list[str] = typer.Option(
+        [],
+        "--key",
+        help="Only this object: a key, or a prefix ending in '/' (zarr/); "
+        "repeatable. Default: every object.",
+    ),
     content: bool = typer.Option(
         False, "--content", "-c", help="Also describe what changed inside each object."
     ),
@@ -1053,10 +1079,11 @@ def diff(
 
     With --content, changed objects whose backend supports it are diffed
     natively (files, tables, arrays, fragments, commits) using metadata only.
+    `--key` limits the diff, and the stores it reads, to those objects.
     """
     repo = _repo()
     try:
-        entries = repo.diff(rev_a, rev_b, content=content)
+        entries = repo.diff(rev_a, rev_b, keys=keys, content=content)
     except TetherError as exc:
         _fail(exc)
     if json_out:
@@ -1260,7 +1287,9 @@ def repair(
 @app.command()
 def restore(
     keys: list[str] = typer.Argument(
-        ..., help="Objects whose working branch to reset."
+        ...,
+        help="Objects whose working branch to reset: a key, or a prefix ending "
+        "in '/' (zarr/).",
     ),
     rev: str = typer.Option(
         ..., "--from", "-f", help="Revision whose pins to restore."
@@ -1822,7 +1851,11 @@ def _print_gc_report(report: GcReport) -> None:
 
 @app.command()
 def promote(
-    keys: list[str] = typer.Argument(None, help="Objects to promote (default: all)."),
+    keys: list[str] = typer.Argument(
+        None,
+        help="Objects to promote: a key, or a prefix ending in '/' (zarr/); "
+        "default: all.",
+    ),
     rev: str | None = typer.Option(
         None,
         "--rev",
