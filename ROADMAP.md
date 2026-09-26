@@ -46,7 +46,11 @@ What remains:
 
 | Blocker | What is missing | What settles it |
 | --- | --- | --- |
-| **Real-service runs** for `neon`, `dolt`, and S3 through SeaweedFS | Neon and Dolt have run only against fakes. The SeaweedFS-backed S3 test skips without `weed` on `PATH`, so CI has never run it. Rate limits, eventual consistency, permissions and the cost of a Neon branch per commit are unobserved. | The rows in section 2, once each, with the result recorded; `weed` in a CI image; a CI row where a credential or a container can live. |
+| **Real-service runs** for `neon`, `dolt`, and S3 through SeaweedFS | Neon has now run by hand against a real project (section 2, "Recorded runs"), which found the next two blockers; its `promote` refusal, a 423 answer, protected pins, rate limits and the cost of a branch per pinning commit are still unobserved, and nothing runs in CI. Dolt has run only against fakes. The SeaweedFS-backed S3 test skips without `weed` on `PATH`, so CI has never run it. | The rest of the rows in section 2, once each, with the result recorded; `weed` in a CI image; a CI row where a credential or a container can live. |
+| **`gc` cannot delete a Neon branch** | `plan_gc` reads no head for a `BRANCH_IS_STORAGE` branch ("branch is storage; deleting reclaims its data"), so a `--force-prune` delete carries `head: None`. `apply_gc`'s preflight (`_require_head`) takes that to mean "the plan could not read this head" and raises `StalePlanError` whenever the head *can* be read -- for Neon, always. `gc --prune-bookmarks --force-prune` therefore never deletes a retired bookmark's Neon branch, and fails before deleting anything else. The sandbox worked around it by deleting the branch through Neon's API before `gc`. | Record the head at plan time for storage branches too (one API call), or let a forced storage-branch delete skip the head check; a conformance test with a `BRANCH_IS_STORAGE` backend. |
+| **`new` against a branch being written** | Fixed for joining, unreleased (after 0.1.0b5): `--adopt` now binds to the branch existing and being the newest generation, and a `--shared` join to it still building on the bookmark's pin, neither to its head. Before, a branch a running service writes moved between plan and apply -- a preview's Dagster daemon commits to its Neon branch every second or two, and Neon's content state includes `commit_xid` -- and every attempt failed with "moved since the plan was made"; a CI job saved a live preview's addresses from its first run instead. A reset (`--discard`) and `reuse` still bind to the head, which they depend on. | A release, then a live run: `new pr<N> --adopt` on a running preview, which lets the sandbox's `tether-fork.sh` drop its saved-addresses artifact. |
+| **A writable Lance handle's address** | `open --json` prints a Lance handle as `<uri>#<branch>@v<N>` whether or not it is writable, the same form as a pinned read, so a consumer that reads `@vN` as a pin opens a writable fork read-only. Only the `read_only` field tells them apart. | Print a writable handle as `<uri>#<branch>` (its version is the open-time head, not a pin), or document that `read_only`, not the address, decides. |
+| **S3 Tables needs SigV4** | pyiceberg reaches the S3 Tables Iceberg REST catalog only with `pyiceberg[rest-sigv4]` (boto3). The `iceberg` extra installs `pyiceberg` alone, so a dataset on S3 Tables fails at its first catalog call. | Add `rest-sigv4` to the `iceberg` extra, or name it in the backends guide's Iceberg section. |
 | **Cloud runs** for `file` and `icechunk` on S3, GCS and Azure | The object-store code paths (obstore client options, versioned objects, `s3_storage` with per-object credentials, `delete_store` on a prefix) have run against in-memory stores and S3-compatible stand-ins only. | The S3, credentials, GCS and Azure rows in section 2. Until then the labels say "not yet cloud-tested". |
 | **Lance's conditional fork** | Onto an existing branch, the head is compared and the branch then deleted and created again: a peer's branch created in that window can be replaced. A fork expecting "absent" is atomic. | A conditional branch update in Lance, then `CONDITIONAL_REF`; until then the window is documented and Lance stays stable. |
 | **Icechunk on local storage** | `reset_branch(from_snapshot_id=)` and `create_branch` are atomic only on object stores (`CONDITIONAL_REF` on `s3://` only). On a local or NFS-shared filesystem, racing processes can each win. | A lock tether takes around local-storage moves, or a refusal of `--shared` there; the docs say so meanwhile. |
@@ -77,6 +81,38 @@ can live in CI, keep them running.
 | **A hosted git remote and a hosted jj remote** (GitHub; a jj-capable forge or a bare repository over SSH) | Two clones of one dataset: the two-clone scenario in `tests/test_store_lifecycle.py` against a real remote, including a `forget-workspace` on one side; `gc` in each clone before and after fetching (`keep-pin` until fetched, `--release-foreign` after); a bookmark pushed from one side and dropped on the other. `tether abandon` under `git` with a remote-tracking branch. A `git` object whose `remote` is configured, pinned from a clone. | Store-lifecycle graduation criterion 2; whether "gc only knows what this clone has fetched" needs more than documentation. |
 | **A large local tree** (10^6 files) and **a large prefix** | `status` first and second fingerprint; `commit` with a listing; `diff --content`. Numbers into the performance guide. | The performance guide's claims are measured, not estimated. |
 
+### Recorded runs
+
+**The lab-platform sandbox**: one AWS account, with S3, S3 Tables and Neon;
+tether 0.1.0b4 and 0.1.0b5; 2026-09-23 to 2026-09-25. A web app's dataset
+had nine objects: Icechunk, Iceberg (S3 Tables' REST catalog), Lance, Delta
+and a `file` prefix, plus four databases in one Neon project. The dataset was
+pinned on `main`, then forked per pull request by CI
+(`new -b pr<N> --eager`). Each fork was written by that PR's preview services
+and retired with `gc --prune-bookmarks --force-prune`. `promote` did not run:
+the app discards preview forks rather than landing them.
+
+- **Worked:**
+  - the baseline `commit`: Icechunk and Lance tags; Iceberg, Delta and Neon
+    by record; the `file` prefix;
+  - `new --eager` forking every forkable store;
+  - writes on the forks through the stores' own libraries: Iceberg appends
+    on a table branch, Icechunk snapshots, Lance versions on a branch;
+  - `status --snapshot` on `main` staying `clean` while the forks moved;
+  - `open --writable` starting a Neon compute for the fork;
+  - a `--discard` reset while nothing was writing;
+  - `gc` releasing the Iceberg, Icechunk and Lance branches.
+- **Found:**
+  - the `gc`-on-Neon, `new`-on-a-written-branch, Lance-address and S3 Tables
+    rows in section 1;
+  - `secrets.toml` replacing the committed Iceberg catalog table instead of
+    merging into it (fixed in 0.1.0b5).
+- **Observed:**
+  - an Iceberg table needs a snapshot before it can be pinned;
+  - deleting a Lance branch deletes its keys (`_refs/branches/<name>.json`
+    and `tree/<name>/`), so a role that may not delete under the store cannot
+    release a Lance fork. The backends guide should name that grant.
+
 ## 3. Tests to add
 
 Rows that need no external resource, only time. Each becomes a job or a
@@ -94,11 +130,11 @@ fixture in `tests/`.
 
 | Feature | Where | Graduates when | The call for 0.1.0 |
 | --- | --- | --- | --- |
-| **`iceberg`** | `tether.experimental.backends.iceberg` | The 0.1.0b4 fixes (empty tables, pyiceberg 0.11) are in; what is left is the catalog row in section 2 as a CI job (a REST catalog in a container) and the conformance suite passing against it. Then move the module to `tether/backends/`, set `MATURITY = "stable"`, update the backends guide and README. | **Next to graduate**, after its CI row. |
+| **`iceberg`** | `tether.experimental.backends.iceberg` | The 0.1.0b4 fixes (empty tables, pyiceberg 0.11) are in, and it has run by hand against S3 Tables' REST catalog (section 2's "Recorded runs"; the SigV4 extra in section 1); what is left is the catalog row in section 2 as a CI job (a REST catalog in a container) and the conformance suite passing against it. Then move the module to `tether/backends/`, set `MATURITY = "stable"`, update the backends guide and README. | **Next to graduate**, after its CI row. |
 | **`ducklake`** | `tether.experimental.backends.ducklake` | The 0.1.0b4 fix (absolute `metadata` path) is in; what is left is the section 2 row as a CI job (DuckDB with the Postgres catalog `pytest-postgresql` already provides). | **Next to graduate**, after its CI row. |
 | **`dolt`** | `tether.experimental.backends.dolt` | The 0.1.0b4 fixes (per-server credentials, merges inside a transaction) are in; what is left is the section 2 row against `dolt sql-server` in a container, as a CI job, and the conformance suite against it. | Graduates **after a real-server run**; otherwise ships experimental. |
 | **`lakefs`** | removed in 0.1.0b4 | -- | **Cut.** Every fork failed (lakeFS branch ids refuse the dots in `tether.ws.*` names), and `promote` booked lakeFS's merge commit as a fast-forward; redesigning ref naming for one experimental kind was not worth it. A dataset whose history names a lakeFS object still works: `gc` and `verify --all-history` skip those manifests with a note, and their pins still count as references. |
-| **`neon`** | `tether.experimental.backends.neon` | A live run of the section 2 row, and a cost story users accept: one branch per pinning commit, unprotected by default, protected pins on paid plans only. | **Stays experimental** at 0.1.0, with the note. |
+| **`neon`** | `tether.experimental.backends.neon` | A live run of the section 2 row (partly done, section 2's "Recorded runs"; the `gc` and `new` blockers in section 1 come first), and a cost story users accept: one branch per pinning commit, unprotected by default, protected pins on paid plans only. | **Stays experimental** at 0.1.0, with the note. |
 | **Registry** (`export`, `publish`, `import`; `tether.experimental.registry`) | `tether.experimental.registry` | The export schema is declared frozen (a `schema_version` in the bundle and a documented compatibility promise), one round trip has run against a managed Postgres, and `import --sync` has been used on a real dataset. Move to `tether.registry`. | **Stays experimental** past 0.1.0 with a stated horizon. It does not block the release: nothing else depends on it. |
 | **Store lifecycle** (`add --create`, `Repo.create`, `gc --delete-stores`, `--store`; `tether.experimental.lifecycle`) | `tether.experimental.lifecycle`; `Capability.CREATE` in `tether.backends.base` | The five criteria in the module docstring: S3 `delete_store` against a real bucket; the two-clone scenario against a real remote; one release cycle with no data-loss report; a second Forkable backend with `CREATE`; a decision on the touched index. Move the module to `tether/repo/_lifecycle.py`, drop the notes, re-home the CHANGELOG entry. | **Stays experimental** at 0.1.0. `Capability.CREATE` stays declared (it is a per-backend fact with conformance coverage). |
 | **Per-URI and per-object credentials** (`secrets.toml` `[uris.*]` / `[objects.*]`; `ObjectBackend.configure_secrets` / `secrets_for`) | core (`tether.backends.base`, `Repo.backend_for`); the reviews asked twice whether it belongs in experimental | The two-identity run in section 2 has happened against real accounts (a `profile`, a `role_arn`, literal keys, an `endpoint_url`) for Icechunk and `file`, and no second resolution order was needed. Then it is simply core, and the configuration guide's "advanced" section is the contract. | Moves to `tether.experimental.credentials` behind `configure_secrets` if the run finds a second order is needed; the kind-level `[backends.<kind>]` secrets stay core either way. Nothing users write in `secrets.toml` changes. |
