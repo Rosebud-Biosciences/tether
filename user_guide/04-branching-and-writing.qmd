@@ -505,7 +505,8 @@ error: refusing to reset working branches with unpinned writes:
 
 Commit, or `tether new --discard` if that was scratch work. When the writes
 are a peer's, on a bookmark you share, `--discard` would erase work that is
-not yours; `tether new --shared` adopts the branch as it is instead.
+not yours; `tether new --shared` adopts the branch as it is instead, even
+while the peer (or a service) keeps writing to it.
 `tether restore KEY --from REV` resets one object's branch and asks the
 same question, of the branch as the store has it.
 

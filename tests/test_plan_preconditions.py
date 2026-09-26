@@ -122,7 +122,9 @@ def _system_of(repo: Repo) -> str:
     return str(repo.objects["db"].locator["system"])
 
 
-def test_verify_plan_checks_each_kind(vcs_root: Path) -> None:
+def test_verify_plan_checks_each_kind(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = Repo.init(vcs_root)
     system = _mem(repo)
     store = default_store()
@@ -216,6 +218,47 @@ def test_verify_plan_checks_each_kind(vcs_root: Path) -> None:
             cmd,
         )
 
+    # ref_present: the branch is there, and no newer generation of the same
+    # dataset's branch for the same bookmark is.
+    def present(r: str) -> Plan:
+        return plan_with("ref_present", backend="memory", locator=locator, ref=r)
+
+    repo._verify_plan(present(ref), cmd)
+    with pytest.raises(StalePlanError, match=rf"{ref}\.2 is gone since the plan"):
+        repo._verify_plan(present(f"{ref}.2"), cmd)
+    for other in ("tether.ws.00000000.probe-x.4", "tether.ws.11111111.probe.4"):
+        backend.fork(locator, {"snapshot_id": s_main}, other)
+    repo._verify_plan(present(ref), cmd)
+    backend.fork(locator, {"snapshot_id": s_main}, f"{ref}.3")
+    with pytest.raises(StalePlanError, match=rf"{ref} is superseded by {ref}\.3"):
+        repo._verify_plan(present(ref), cmd)
+    backend.fork(locator, {"snapshot_id": s_main}, f"{ref}.2")
+    with pytest.raises(StalePlanError, match=rf"{ref}\.2 is superseded by {ref}\.3"):
+        repo._verify_plan(present(f"{ref}.2"), cmd)
+    repo._verify_plan(present(f"{ref}.3"), cmd)
+
+    # ref_descends: the branch's head still descends from the state; a
+    # backend that cannot tell is refused as well.
+    def descends(state: dict | None) -> Plan:
+        return plan_with(
+            "ref_descends", state, backend="memory", locator=locator, ref=ref
+        )
+
+    repo._verify_plan(descends({"snapshot_id": s_main}), cmd)
+    elsewhere = store.write(system, "scratch", {"elsewhere": 1})
+    del store.system(system).branches["scratch"]
+    with pytest.raises(StalePlanError, match=rf"{ref} no longer builds on"):
+        repo._verify_plan(descends({"snapshot_id": elsewhere}), cmd)
+    with pytest.raises(StalePlanError, match=r"ref_descends drifted \(no state"):
+        repo._verify_plan(descends(None), cmd)
+    with monkeypatch.context() as m:
+        m.setattr(backend, "ancestor_of", lambda *args, **kw: None)
+        with pytest.raises(StalePlanError, match=r"cannot tell .*\(memory cannot say"):
+            repo._verify_plan(descends({"snapshot_id": s_main}), cmd)
+    del store.system(system).branches[ref]
+    with pytest.raises(StalePlanError, match=r"cannot tell whether .*unknown ref"):
+        repo._verify_plan(descends({"snapshot_id": s_main}), cmd)
+
     # base_state: the base branch is where the plan saw it, or not.
     repo._verify_plan(
         plan_with(
@@ -287,6 +330,8 @@ def test_verify_plan_checks_each_kind(vcs_root: Path) -> None:
         "config_version",
         "ref_absent",
         "ref_head",
+        "ref_present",
+        "ref_descends",
         "base_state",
         "pin_state",
         "no_new_holders",

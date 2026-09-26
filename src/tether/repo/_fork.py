@@ -113,9 +113,12 @@ class ForkOps(RepoCore):
         highest `.<n>` generation where a store made siblings) takes that
         branch as its working ref as it is (`adopt`): no reset, no copy,
         whatever its head -- the branches of a dataset whose repository was
-        lost, found by `recover_report`. The plan binds to each adopted head
-        (`ref_head`). Objects without such a branch fork as usual. Refused
-        on the trunk bookmark, whose working refs are the upstream branches.
+        lost, found by `recover_report`. Adopting moves nothing, so the plan
+        binds to each adopted branch still existing and still being the
+        highest generation (`ref_present`), not to its head: writes landing
+        between plan and apply are adopted too. Objects without such a branch
+        fork as usual. Refused on the trunk bookmark, whose working refs are
+        the upstream branches.
 
         Args:
             rev: Revision whose manifests to fork from (`None`: working tree).
@@ -537,7 +540,11 @@ class ForkOps(RepoCore):
         checkout's or clone's writes, and `--discard` would erase a peer's
         work -- what a refused conditional move used to steer to. With
         `shared` the branch is adopted as it is (`adopt`), whoever wrote it,
-        as long as it builds on what the bookmark's commit pins.
+        as long as it builds on what the bookmark's commit pins. The plan
+        binds to it still doing so (`descends_from`, checked as
+        `ref_descends`), not to its head, so a branch someone keeps writing
+        can be joined; where the store cannot tell, only to the branch
+        still being there.
         """
         backend = self.backend_for(m.kind)
         only_ours, writers = self._whose_writes(key, existing, bookmark)
@@ -549,6 +556,13 @@ class ForkOps(RepoCore):
             except TetherError:
                 builds = None
         if shared and builds is not False:
+            params: dict[str, Any] = {
+                "head": head,
+                "fork_point": (self.workspace.fork_points.get(key) if ours else None)
+                or m.state,
+            }
+            if builds:
+                params["descends_from"] = m.state
             return Action(
                 "adopt",
                 key,
@@ -557,13 +571,7 @@ class ForkOps(RepoCore):
                 detail=f"holds writes no commit pins ({short_state(head)}; "
                 f"{writers}); kept as it is and shared -- the next commit here "
                 "pins them too",
-                params={
-                    "head": head,
-                    "fork_point": (
-                        self.workspace.fork_points.get(key) if ours else None
-                    )
-                    or m.state,
-                },
+                params=params,
             )
         if builds is False:
             advice = (
@@ -589,8 +597,10 @@ class ForkOps(RepoCore):
 
     def _with_new_preconditions(self, plan: Plan) -> Plan:
         """What `apply_new` must find unchanged: the manifests at the target,
-        this workspace, no new holder of the bookmark, and every branch the
-        plan keeps, resets, or creates afresh."""
+        this workspace, no new holder of the bookmark, the head of every
+        branch the plan keeps or resets, the absence of every branch it
+        creates afresh, and every branch it adopts still there, still the
+        newest generation and, for `--shared`, still building on the pin."""
         ctx = plan.context
         plan.require(
             "manifest_hash",
@@ -615,10 +625,29 @@ class ForkOps(RepoCore):
             if a.key not in self.objects:
                 continue
             locator = dict(self.objects[a.key].locator)
-            if a.op in ("reuse", "adopt"):
+            if a.op == "adopt":
+                plan.require(
+                    "ref_present",
+                    key=a.key,
+                    backend=a.kind,
+                    locator=locator,
+                    ref=a.target,
+                    what=f"new {a.key}",
+                )
+                if a.params.get("descends_from") is not None:
+                    plan.require(
+                        "ref_descends",
+                        a.params["descends_from"],
+                        key=a.key,
+                        backend=a.kind,
+                        locator=locator,
+                        ref=a.target,
+                        what=f"new {a.key}",
+                    )
+            elif a.op == "reuse":
                 plan.require(
                     "ref_head",
-                    a.params.get("then_state" if a.op == "reuse" else "head"),
+                    a.params.get("then_state"),
                     key=a.key,
                     backend=a.kind,
                     locator=locator,

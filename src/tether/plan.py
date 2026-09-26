@@ -42,6 +42,8 @@ PRECONDITION_KINDS = frozenset(
         "config_version",
         "ref_absent",
         "ref_head",
+        "ref_present",
+        "ref_descends",
         "base_state",
         "pin_state",
         "no_new_holders",
@@ -54,7 +56,11 @@ check `Repo._verify_plan` knows how to run; a `plan_*` appends them, and
 every `apply_*` runs them all before its first action. `workspace_bookmark`
 is the bookmark the checkout works on, as `workspace.toml` records it *and*
 as the VCS places the working copy (git's `HEAD` branch; under jj the
-bookmarks at `@` or, with edits in `@`, at `@-`)."""
+bookmarks at `@` or, with edits in `@`, at `@-`). `ref_present` is a branch
+that still exists and is still the highest generation of its bookmark's
+branch; `ref_descends` one whose head still descends from a recorded state
+-- what an `adopt` relies on, where `ref_head` would pin a head it never
+moves."""
 
 REQUIRED_PRECONDITIONS: dict[str, frozenset[str]] = {
     "commit": frozenset({"workspace_id", "workspace_bookmark", "manifest_hash"}),
@@ -88,7 +94,7 @@ REQUIRED_ACTION_PRECONDITIONS: dict[str, dict[str, tuple[frozenset[str], ...]]] 
     "new": {
         "fork": (frozenset({"ref_head", "ref_absent"}),),
         "reuse": (frozenset({"ref_head"}),),
-        "adopt": (frozenset({"ref_head"}),),
+        "adopt": (frozenset({"ref_present", "ref_head"}),),
     },
     "restore": {"fork": (frozenset({"ref_head", "ref_absent"}),)},
     "promote": {
@@ -102,7 +108,8 @@ REQUIRED_ACTION_PRECONDITIONS: dict[str, dict[str, tuple[frozenset[str], ...]]] 
 """Per command and action verb, the precondition kinds that must name the
 action's object: each inner set is a group of alternatives, one of which
 must be present (a fork carries `ref_head` when its branch existed at plan
-time and `ref_absent` when it did not)."""
+time and `ref_absent` when it did not; an adopt carries `ref_present`, or
+`ref_head` in a plan saved by 0.1.0b5 or earlier)."""
 
 
 @dataclass(frozen=True)

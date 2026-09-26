@@ -1821,6 +1821,23 @@ class RepoCore:
                 dict(pre.expected) if pre.expected is not None else None,
                 what=str(params.get("what") or pre.key or "plan"),
             )
+        elif kind == "ref_present":
+            self._require_present(
+                self.backend_for(str(params["backend"])),
+                dict(params["locator"]),
+                str(params["ref"]),
+                what=str(params.get("what") or pre.key or "plan"),
+            )
+        elif kind == "ref_descends":
+            if pre.expected is None:
+                fail("no state named")  # a check that checks nothing
+            self._require_descends(
+                self.backend_for(str(params["backend"])),
+                dict(params["locator"]),
+                str(params["ref"]),
+                dict(pre.expected),
+                what=str(params.get("what") or pre.key or "plan"),
+            )
         elif kind == "base_state":
             backend = self.backend_for(str(params["backend"]))
             locator = dict(params["locator"])
@@ -1902,6 +1919,72 @@ class RepoCore:
             raise StalePlanError(
                 f"{what}: {ref} moved since the plan was made "
                 f"({short_state(expected)} -> {short_state(now)}); re-run the plan"
+            )
+
+    @staticmethod
+    def _require_present(
+        backend: ObjectBackend, locator: Locator, ref: str, *, what: str
+    ) -> None:
+        """Refuse to take `ref` as it is unless it still exists and is still
+        the highest generation of its bookmark's branch.
+
+        A newer generation (`<name>.<n>`) is a sibling a store made because
+        it could not reset `ref`: whoever made it writes there now, and
+        `ref` is a stale branch.
+        """
+        refs = backend.list_working_refs(locator)
+        if ref not in refs:
+            raise StalePlanError(
+                f"{what}: {ref} is gone since the plan was made; re-run the plan"
+            )
+        dataset = _m.working_ref_dataset(ref)
+        slug = _m.working_ref_bookmark(ref)
+        if dataset is None or slug is None:
+            return
+        generation = _m.working_ref_generation(ref) or 1
+        newer = sorted(
+            (
+                r
+                for r in refs
+                if _m.working_ref_dataset(r) == dataset
+                and _m.working_ref_bookmark(r) == slug
+                and (_m.working_ref_generation(r) or 1) > generation
+            ),
+            key=lambda r: _m.working_ref_generation(r) or 1,
+        )
+        if newer:
+            raise StalePlanError(
+                f"{what}: {ref} is superseded by {newer[-1]}, a newer generation "
+                f"a store makes when it cannot reset a branch; taking {ref} "
+                "would write to a stale branch -- re-run the plan"
+            )
+
+    @staticmethod
+    def _require_descends(
+        backend: ObjectBackend,
+        locator: Locator,
+        ref: str,
+        expected: State,
+        *,
+        what: str,
+    ) -> None:
+        """Refuse to take `ref` as it is unless its head still descends from
+        `expected`; a backend that cannot tell is refused too."""
+        try:
+            builds = backend.ancestor_of(locator, expected, ref)
+            why = f"{backend.kind} cannot say"
+        except TetherError as exc:
+            builds, why = None, str(exc)
+        if builds is False:
+            raise StalePlanError(
+                f"{what}: {ref} no longer builds on {short_state(expected)}: it "
+                "was reset onto something else since the plan was made; re-run "
+                "the plan"
+            )
+        if builds is None:
+            raise StalePlanError(
+                f"{what}: cannot tell whether {ref} still builds on "
+                f"{short_state(expected)} ({why}); re-run the plan"
             )
 
     # -- upgrade --------------------------------------------------------------- #

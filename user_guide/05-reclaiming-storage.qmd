@@ -71,7 +71,7 @@ can recompute it. Plans saved before 0.1.0b4 (format 2, no digest) or
 | Command | Required preconditions | Per object |
 | --- | --- | --- |
 | `commit` | `workspace_id`, `workspace_bookmark`, `manifest_hash` | -- |
-| `new` | `workspace_id`, `manifest_hash` | each `fork`: `ref_head` (the branch exists) or `ref_absent`; each `reuse` or `adopt`: `ref_head` |
+| `new` | `workspace_id`, `manifest_hash` | each `fork`: `ref_head` (the branch exists) or `ref_absent`; each `reuse`: `ref_head`; each `adopt`: `ref_present` (`ref_head` in plans saved by 0.1.0b5) |
 | `restore` | `workspace_id`, `workspace_bookmark`, `manifest_hash` | each `fork`: `ref_head` or `ref_absent` |
 | `promote` | `workspace_id`, `workspace_bookmark`, `bookmark_head`, `manifest_hash` | each `fast-forward` or `merge`: `base_state`, and `ref_head` or `pin_state` |
 | `drop` | `workspace_id`, `workspace_bookmark`, `bookmark_head`, `no_new_holders`, `vcs_head`, `history_digest` | -- |
@@ -89,6 +89,12 @@ version, and `forget-workspace` nothing.
 in another workspace may reference a pin a gc plan would release. A
 promote's `base_state` is the base branch's head, and `ref_head` or
 `pin_state` the state its source names.
+
+An `adopt` moves nothing, so it is not bound to a head. `ref_present` holds
+while the adopted branch exists and no newer generation of it (`.2`, `.3`)
+has appeared. When the store could say that a `--shared` adopt builds on
+the bookmark's pin, the plan also carries `ref_descends`: it holds while
+the branch still does, and fails if the store can no longer tell.
 
 A race *during* apply is handled per action instead:
 

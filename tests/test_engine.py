@@ -3674,6 +3674,151 @@ def test_new_shared_refuses_a_branch_that_does_not_build_on_the_bookmark(
     assert store.read(system, ref) == {"elsewhere": 1}
 
 
+def _joining_clone(vcs_root: Path, tmp_path: Path) -> tuple[Repo, str, str]:
+    """A checkout works on bookmark `feat`, its branch holding an uncommitted
+    write; another clone is about to join it: (clone, system, branch)."""
+    a = Repo.init(vcs_root)
+    system = _mem_object(a)
+    store = default_store()
+    store.write(system, "main", {"base": 1})
+    a.commit("baseline")
+    b = _clone(vcs_root, tmp_path / "clone", a.vcs.kind)
+    a.new(bookmark="feat", eager=True)
+    ref = a.workspace.working_refs["db"]
+    store.write(system, ref, {"base": 1, "a": 1})
+    return b, system, ref
+
+
+@pytest.mark.parametrize(
+    "between",
+    ["writes", "writes, ancestry unknown", "reset elsewhere", "branch deleted"],
+)
+def test_new_shared_binds_to_the_branch_building_on_the_pin_not_its_head(
+    vcs_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, between: str
+) -> None:
+    """A branch someone keeps writing -- a preview environment's daemon
+    committing every second, a peer's job -- moved between `plan_new
+    --shared` and its apply, and the plan was bound to the head it saw, so
+    the bookmark could not be joined at all. Adopting moves nothing: the plan
+    binds to the branch still being there and still building on the
+    bookmark's pin. Writes in between are adopted too; a branch reset onto
+    something else, or deleted, is refused. Where the store cannot tell
+    ancestry, the plan promised none, and only the branch being there binds."""
+    from tether.plan import Plan
+
+    b, system, ref = _joining_clone(vcs_root, tmp_path)
+    store = default_store()
+    sys = store.system(system)
+    unknown = between == "writes, ancestry unknown"
+    if unknown:
+        monkeypatch.setattr(
+            b.backend_for("memory"), "ancestor_of", lambda *args, **kw: None
+        )
+    plan = b.plan_new(bookmark="feat", shared=True)
+    (adopt,) = plan.actions
+    assert adopt.op == "adopt" and adopt.target == ref
+    pinned = b.objects["db"].state
+    bound = [(p.kind, p.expected) for p in plan.preconditions if p.key == "db"]
+    if unknown:
+        assert "descends_from" not in adopt.params
+        assert bound == [("ref_present", None)]
+    else:
+        assert adopt.params["descends_from"] == pinned
+        assert bound == [("ref_present", None), ("ref_descends", pinned)]
+    saved = plan.to_json()
+
+    if between.startswith("writes"):
+        moved = store.write(system, ref, {"base": 1, "a": 2})
+        b.apply_new(Plan.from_json(saved))
+        assert b.workspace.working_refs["db"] == ref
+        assert sys.branches[ref] == moved  # adopted, not reset
+        assert b.workspace.fork_points["db"] == pinned
+        return
+
+    if between == "reset elsewhere":
+        sys.branches[ref] = store.write(system, "scratch", {"elsewhere": 1})
+        del sys.branches["scratch"]
+        expected = f"new db: {ref} no longer builds on"
+    else:
+        del sys.branches[ref]
+        expected = f"new db: {ref} is gone since the plan was made"
+    with pytest.raises(StalePlanError) as exc:
+        b.apply_new(Plan.from_json(saved))
+    assert expected in str(exc.value) and "re-run the plan" in str(exc.value)
+    assert "feat" not in b.vcs.bookmarks()
+    assert ref not in b.workspace.working_refs.values()
+
+
+def test_new_binds_a_branch_it_keeps_or_resets_to_its_head(vcs_root: Path) -> None:
+    """Unlike an adopt, `reuse` claims the branch sits at the pin, and a fork
+    of an existing branch resets it: both stay bound to the head the plan
+    saw, and a write in between is refused, the branch keeping it."""
+    from tether.plan import Plan
+
+    repo = Repo.init(vcs_root)
+    system = _mem_object(repo)
+    store = default_store()
+    repo.commit("baseline")
+    repo.new(bookmark="work", eager=True)
+    wref = repo.workspace.working_refs["db"]
+    store.write(system, wref, {"v": 1})
+    repo.commit("work: v1")
+    for discard in (False, True):
+        plan = repo.plan_new(eager=True, discard=discard)
+        (action,) = plan.actions
+        if discard:
+            assert action.op == "fork" and action.params["existing"] == wref
+        else:
+            assert action.op == "reuse" and action.target == wref
+        head = {"snapshot_id": store.resolve(system, wref)}
+        bound = [(p.kind, p.expected) for p in plan.preconditions if p.key == "db"]
+        assert bound == [("ref_head", head)]
+        moved = store.write(system, wref, {"v": 2 + discard})
+        with pytest.raises(StalePlanError, match="moved since the plan was made"):
+            repo.apply_new(Plan.from_json(plan.to_json()))
+        assert store.resolve(system, wref) == moved
+
+
+@pytest.mark.parametrize("how", ["--shared", "--adopt"])
+def test_a_saved_new_plan_that_bound_an_adopt_to_its_head_still_applies(
+    vcs_root: Path, tmp_path: Path, how: str
+) -> None:
+    """Plans saved by 0.1.0b5 and earlier bound each `adopt` to the head they
+    saw (`ref_head`). Such a plan still verifies, and binds as it did:
+    refused while the head is elsewhere, applied once it is back."""
+    from tether.plan import Plan, Precondition
+
+    b, system, ref = _joining_clone(vcs_root, tmp_path)
+    store = default_store()
+    plan = b.plan_new(bookmark="feat", shared=how == "--shared", adopt=how == "--adopt")
+    (adopt,) = plan.actions
+    assert adopt.op == "adopt" and adopt.target == ref
+    # What an older tether saved: no `descends_from`, and a `ref_head` where
+    # `ref_present` (and `ref_descends`) stand now -- under its own digest.
+    adopt.params.pop("descends_from", None)
+    present = next(p for p in plan.preconditions if p.kind == "ref_present")
+    plan.preconditions = [
+        Precondition("ref_head", adopt.params["head"], key="db", params=present.params)
+        if p is present
+        else p
+        for p in plan.preconditions
+        if p.kind != "ref_descends"
+    ]
+    old = Plan.from_json(plan.to_json())
+    assert not old.edited() and old.missing_preconditions() == []
+    assert [p.kind for p in old.preconditions if p.key == "db"] == ["ref_head"]
+
+    head = store.resolve(system, ref)
+    store.write(system, ref, {"base": 1, "a": 2})
+    with pytest.raises(StalePlanError, match="moved since the plan was made"):
+        b.apply_new(old)
+    assert "feat" not in b.vcs.bookmarks()
+    store.system(system).branches[ref] = head
+    b.apply_new(old)
+    assert b.workspace.working_refs["db"] == ref
+    assert store.resolve(system, ref) == head
+
+
 def test_a_new_whose_fork_a_peer_beat_points_at_shared_not_at_a_reset(
     vcs_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

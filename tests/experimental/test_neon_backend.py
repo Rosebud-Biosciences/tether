@@ -829,3 +829,50 @@ def test_neon_repo_lifecycle(vcs_root: Path, monkeypatch: pytest.MonkeyPatch) ->
         assert wref in report.kept_working_refs.get("db", []) or wref in (
             report.deleted_working_refs.get("db", [])
         )
+
+
+@pytest.mark.parametrize("how", ["--adopt", "--shared"])
+def test_neon_branch_written_between_plan_and_apply_is_still_adopted(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    """A preview environment's daemon commits to its Neon branch every
+    second, so `commit_xid` moves between `plan_new` and `apply_new`.
+    Adopting takes the branch whatever its head: the plan still applies."""
+    from tether.plan import Plan
+    from tether.repo import Repo
+
+    monkeypatch.setenv("NEON_API_KEY", "secret")
+    fake = FakeNeon()
+    probe = _Probe(fake)
+    with respx.mock as router:
+        fake.install(router)
+        Repo.init(vcs_root)
+        secrets = vcs_root / ".tether" / "secrets.toml"
+        secrets.write_text(f'[backends.neon]\napi_url = "{BASE}"\n')
+        secrets.chmod(0o600)
+        repo = Repo.find(vcs_root)
+        backend = repo.backend_for("neon")
+        monkeypatch.setattr(backend, "_probe", probe)
+        monkeypatch.setattr(backend, "_active_writers", lambda uri: 0)
+        repo.add("db", "neon", dict(LOCATOR))
+        repo.commit("baseline")
+        repo.new(bookmark="preview", eager=True)
+        wref = repo.workspace.working_refs["db"]
+        probe.write(wref)  # the daemon's writes, never committed
+        repo.new("main")
+
+        plan = repo.plan_new(
+            "preview", adopt=how == "--adopt", shared=how == "--shared"
+        )
+        (adopt,) = [a for a in plan.actions if a.key == "db"]
+        assert adopt.op == "adopt" and adopt.target == wref
+        # Neon cannot say what a head descends from: nothing to bind but the
+        # branch being there.
+        assert [p.kind for p in plan.preconditions if p.key == "db"] == ["ref_present"]
+        xid = backend.fingerprint(LOCATOR, wref)["commit_xid"]
+        probe.write(wref)
+        assert backend.fingerprint(LOCATOR, wref)["commit_xid"] != xid
+        repo.apply_new(Plan.from_json(plan.to_json()))
+        assert repo.workspace.bookmark == "preview"
+        assert repo.workspace.working_refs["db"] == wref
+        assert fake.restores == []  # nothing was reset

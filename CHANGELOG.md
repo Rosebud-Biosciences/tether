@@ -13,9 +13,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `tether restore KEY... --at REF` starts the bookmark's branch as a copy of
   a native branch, tag or state id. `REF` itself is never moved.
 - `tether new --adopt` takes the bookmark's existing store branches as they
-  are, uncommitted writes included, instead of resetting them.
+  are, uncommitted writes included, instead of resetting them. A saved plan
+  binds to each branch still existing and being the newest generation, not
+  to its head.
 - `tether recover` lists tether's refs in each store by dataset id and prints
   the steps that take back a dataset whose repository was lost.
+
+### Fixed
+
+- `tether new --shared` can join a bookmark whose branch is being written,
+  such as a preview environment's database. The plan binds to the branch
+  still building on the bookmark's pin, not to its head, which moved on.
 
 ## [0.1.0b5] - 2026-09-25
 

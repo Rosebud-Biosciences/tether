@@ -332,7 +332,9 @@ A branch already at the pin is kept (`reuse`); another existing branch is
 reset onto it. A branch holding writes no commit pins stops `new`
 (`refuse`), and the refusal says whose writes they are. Your own: commit
 them, or pass `--discard`. A peer's: `--shared` adopts the branch as it is
-(`adopt`) when it builds on the bookmark's pin.
+(`adopt`) when it builds on the bookmark's pin. Adopting moves nothing, so
+a saved plan binds to the branch still building on that pin, not to its
+head: a branch a service keeps writing can still be joined.
 
 `--adopt` takes the bookmark's existing branch in each store as it is,
 whatever it holds (`adopt`): no reset, no copy, no `--discard`. Where a
@@ -340,8 +342,9 @@ store made siblings (`.2`, `.3`), the highest generation is taken, and the
 plan says which. This is how the branches of a dataset whose repository
 was lost come back
 ([Recovering a lost dataset repo](14-troubleshooting.qmd#recovering-a-lost-dataset-repo)).
-An object with no such branch forks as usual. The plan binds to each
-adopted head, so a saved plan is stale once the branch moves. `status`
+An object with no such branch forks as usual. A saved plan binds to each
+adopted branch still existing and still being the highest generation, not
+to its head: writes landing before the apply are adopted too. `status`
 then shows the adopted writes as `modified`, and `commit` pins them.
 `--adopt` is refused on the trunk and with `--keep` or `--discard`, and a
 bookmark another live checkout holds still needs `--shared`.

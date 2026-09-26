@@ -464,7 +464,8 @@ def test_new_adopt_takes_a_branch_with_uncommitted_writes_as_it_is(
     assert taken.params["generation"] is None
     assert "adopted as it is" in taken.detail and "next commit pins" in taken.detail
     (bound,) = [p for p in plan.preconditions if p.key == "db"]
-    assert bound.kind == "ref_head" and bound.expected == {"snapshot_id": head}
+    assert bound.kind == "ref_present" and bound.expected is None
+    assert bound.params["ref"] == wref
     assert plan.is_empty  # nothing is written to the store
     repo.apply_new(plan)
 
@@ -513,7 +514,7 @@ def test_new_adopt_takes_the_highest_generation_and_forks_the_rest(
     # An object whose store has no such branch forks as `new` always does.
     assert ops["fresh"].op == "fork" and ops["fresh"].target == f"tether.ws.{ds}.feat"
     assert {(p.key, p.kind) for p in plan.preconditions if p.key} == {
-        ("db", "ref_head"),
+        ("db", "ref_present"),
         ("fresh", "ref_absent"),
     }
     repo.apply_new(plan)
@@ -541,29 +542,58 @@ def test_new_adopt_takes_the_highest_generation_and_forks_the_rest(
     }
 
 
-def test_new_adopt_plan_goes_stale_when_the_adopted_head_moves(
-    vcs_root: Path, tmp_path_factory: pytest.TempPathFactory
+@pytest.mark.parametrize(
+    "between", ["writes", "unrelated refs", "branch deleted", "newer generation"]
+)
+def test_a_saved_new_adopt_plan_binds_to_the_branch_not_its_head(
+    vcs_root: Path, tmp_path_factory: pytest.TempPathFactory, between: str
 ) -> None:
+    """Adopting moves nothing: the branch is taken whatever its head. A plan
+    bound to the head it saw was refused whenever the branch was written in
+    between, so a branch something keeps writing could never be adopted. It
+    binds to the branch still being there and still the newest generation of
+    the bookmark's branch -- a sibling a store made since is where whoever
+    made it writes, and the adopted one is stale."""
     lost, system, head = _lost_bookmark(vcs_root)
     store = default_store()
+    sys = store.system(system)
     wref = lost.workspace.working_refs["db"]
+    ds = lost.config.dataset_id
     repo = _recovered(lost, tmp_path_factory)
     repo.commit("recover the trunk")
     saved = repo.plan_new(bookmark="feat", adopt=True).to_json()
     assert json.loads(saved)["context"]["adopt"] is True
 
-    moved = store.write(system, wref, {"v": 4})  # the lost checkout writes on
-    with pytest.raises(StalePlanError, match="moved since the plan was made"):
+    if between in ("writes", "unrelated refs"):
+        moved = store.write(system, wref, {"v": 4})  # the lost checkout writes on
+        if between == "unrelated refs":
+            # Newer generations, but of another bookmark's or dataset's branch.
+            sys.branches[f"tether.ws.{ds}.feature.5"] = head
+            sys.branches[f"tether.ws.{'f' * 8}.feat.5"] = head
         repo.apply_new(Plan.from_json(saved))
+        assert repo.workspace.bookmark == "feat"
+        assert repo.workspace.working_refs["db"] == wref
+        assert sys.branches[wref] == moved  # no reset, no copy
+        repo.commit("feat: recovered")
+        assert repo.objects["db"].state == {"snapshot_id": moved}
+        return
+
+    if between == "branch deleted":
+        del sys.branches[wref]
+        expected = f"new db: {wref} is gone since the plan was made"
+    else:
+        sys.branches[f"{wref}.2"] = store.write(system, "g2", {"g": 2})
+        expected = f"new db: {wref} is superseded by {wref}.2"
+    with pytest.raises(StalePlanError) as exc:
+        repo.apply_new(Plan.from_json(saved))
+    assert expected in str(exc.value) and "re-run the plan" in str(exc.value)
     assert repo.workspace.bookmark == "main" and "feat" not in repo.vcs.bookmarks()
-    assert store.system(system).branches[wref] == moved != head
-    data = json.loads(saved)
-    data["actions"][0]["params"]["head"] = {"snapshot_id": moved}
-    with pytest.raises(StalePlanError, match="edited after it was saved"):
-        repo.apply_new(Plan.from_dict(data))
+    # Planned again, the bookmark's branch as the store has it now.
     repo.new(bookmark="feat", adopt=True)
-    assert repo.workspace.working_refs["db"] == wref
-    assert store.system(system).branches[wref] == moved
+    if between == "branch deleted":
+        assert repo.workspace.pending_forks["db"] == wref
+    else:
+        assert repo.workspace.working_refs["db"] == f"{wref}.2"
 
 
 def test_new_adopt_refusals(vcs_root: Path, tmp_path: Path) -> None:
