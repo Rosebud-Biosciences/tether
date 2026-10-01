@@ -3819,6 +3819,47 @@ def test_a_saved_new_plan_that_bound_an_adopt_to_its_head_still_applies(
     assert store.resolve(system, ref) == head
 
 
+@pytest.mark.parametrize("how", ["--shared", "--adopt"])
+def test_a_saved_new_plan_bound_to_a_head_refuses_a_superseded_branch(
+    vcs_root: Path, tmp_path: Path, how: str
+) -> None:
+    """A newer generation beside the adopted branch leaves its head as it
+    was, so a plan saved by 0.1.0b5 (`ref_head` only) passed its own checks
+    and adopted the stale branch. Apply checks every adopt's branch is
+    still the newest generation, whatever the plan carries."""
+    from tether.plan import Plan, Precondition
+
+    b, system, ref = _joining_clone(vcs_root, tmp_path)
+    store = default_store()
+    plan = b.plan_new(bookmark="feat", shared=how == "--shared", adopt=how == "--adopt")
+    (adopt,) = plan.actions
+    adopt.params.pop("descends_from", None)
+    present = next(p for p in plan.preconditions if p.kind == "ref_present")
+    plan.preconditions = [
+        Precondition("ref_head", adopt.params["head"], key="db", params=present.params)
+        if p is present
+        else p
+        for p in plan.preconditions
+        if p.kind != "ref_descends"
+    ]
+    old = Plan.from_json(plan.to_json())
+    assert not old.edited() and old.missing_preconditions() == []
+    assert {p.kind for p in old.preconditions} & {
+        "ref_present",
+        "ref_descends",
+    } == set()
+
+    sys = store.system(system)
+    sys.branches[f"{ref}.2"] = sys.branches[ref]
+    with pytest.raises(StalePlanError, match=rf"{ref} is superseded by {ref}\.2"):
+        b.apply_new(old)
+    assert "feat" not in b.vcs.bookmarks()
+    assert ref not in b.workspace.working_refs.values()
+    del sys.branches[f"{ref}.2"]
+    b.apply_new(old)
+    assert b.workspace.working_refs["db"] == ref
+
+
 def test_a_new_whose_fork_a_peer_beat_points_at_shared_not_at_a_reset(
     vcs_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

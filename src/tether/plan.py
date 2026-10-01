@@ -109,7 +109,8 @@ REQUIRED_ACTION_PRECONDITIONS: dict[str, dict[str, tuple[frozenset[str], ...]]] 
 action's object: each inner set is a group of alternatives, one of which
 must be present (a fork carries `ref_head` when its branch existed at plan
 time and `ref_absent` when it did not; an adopt carries `ref_present`, or
-`ref_head` in a plan saved by 0.1.0b5 or earlier)."""
+`ref_head` in a plan saved by 0.1.0b5 or earlier -- `apply_new` checks every
+adopted branch for presence and generation itself, whichever it carries)."""
 
 
 @dataclass(frozen=True)
