@@ -6,8 +6,9 @@ branches, and `restore`, `promote`, `drop`, `forget-workspace`, `import`,
 step; `pull`, `undo`, `abandon --gc` and `add --create` write without one.
 A `Plan` lists the concrete `Action`s with the inputs they were
 computed from, serializes to JSON (`tether commit --dry-run --json`), and can be
-applied later (`tether commit --from-plan plan.json`); apply re-checks that the
-world still matches the plan before touching anything.
+applied later (`tether commit --from-plan plan.json`) by the same tether
+version; apply re-checks that the world still matches the plan before
+touching anything.
 """
 
 from __future__ import annotations
@@ -21,18 +22,18 @@ from typing import Any
 from tether.errors import ConfigError, StalePlanError
 
 PLAN_FORMAT = 3
-"""Bumped when a saved plan's shape changes. Format 1 (before 0.1.0b1) had
-no `preconditions`; format 2 (before 0.1.0b4) no `digest`, so its actions
-and context could be edited apart from the preconditions that vouch for
-them. Either is refused with "re-run the plan"."""
+"""Bumped when a saved plan's shape changes. A saved plan applies only under
+the tether version that made it (`Plan.tether_version`), so no older format
+is ever read: a plan from any other version -- every format before this one
+included -- is refused with "re-run the plan" before its format is looked
+at."""
 
-# Legacy, removed at 0.1.0: the refusals of plan formats 1 and 2 (collapse
-# into `from_dict`'s generic "unsupported plan format")
-_UNBOUND_FORMATS = {
-    1: "plan format 1 predates 0.1.0b1 and carries no preconditions",
-    2: "plan format 2 predates 0.1.0b4 and carries no digest binding its actions "
-    "and context to its preconditions",
-}
+
+def _running_version() -> str:
+    from tether import __version__
+
+    return __version__
+
 
 PRECONDITION_KINDS = frozenset(
     {
@@ -87,19 +88,17 @@ REQUIRED_PRECONDITIONS: dict[str, frozenset[str]] = {
 }
 """The preconditions a command's plan must carry whatever it found to do.
 
-A plan supplies its own preconditions, so a plan that lacks one -- saved by a
-tether from before the kind existed, or edited -- would apply wherever and
-whenever it was loaded. `Repo._verify_plan` refuses such a plan with "re-run
-the plan". The per-object kinds are required per action instead; see
+A plan supplies its own preconditions, so a plan that lacks one -- edited
+along with its digest -- would apply wherever and whenever it was loaded.
+`Repo._verify_plan` refuses such a plan with "re-run the plan". The
+per-object kinds are required per action instead; see
 :data:`REQUIRED_ACTION_PRECONDITIONS`."""
 
 REQUIRED_ACTION_PRECONDITIONS: dict[str, dict[str, tuple[frozenset[str], ...]]] = {
     "new": {
         "fork": (frozenset({"ref_head", "ref_absent"}),),
         "reuse": (frozenset({"ref_head"}),),
-        # Legacy, removed at 0.1.0: `ref_head` as the alternative, for adopts
-        # in plans saved by 0.1.0b5
-        "adopt": (frozenset({"ref_present", "ref_head"}),),
+        "adopt": (frozenset({"ref_present"}),),
     },
     "restore": {"fork": (frozenset({"ref_head", "ref_absent"}),)},
     "promote": {
@@ -113,9 +112,7 @@ REQUIRED_ACTION_PRECONDITIONS: dict[str, dict[str, tuple[frozenset[str], ...]]] 
 """Per command and action verb, the precondition kinds that must name the
 action's object: each inner set is a group of alternatives, one of which
 must be present (a fork carries `ref_head` when its branch existed at plan
-time and `ref_absent` when it did not; an adopt carries `ref_present`, or
-`ref_head` in a plan saved by 0.1.0b5 or earlier -- `apply_new` checks every
-adopted branch for presence and generation itself, whichever it carries)."""
+time and `ref_absent` when it did not; an adopt carries `ref_present`)."""
 
 
 @dataclass(frozen=True)
@@ -226,6 +223,10 @@ class Plan:
     created_at: str = field(
         default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds")
     )
+    tether_version: str = field(default_factory=_running_version)
+    """The tether version that made the plan. A saved plan loads only under
+    that same version (see :meth:`from_dict`): what the preconditions check,
+    and how apply reads its actions, are that version's."""
     saved_digest: str | None = field(default=None, compare=False, repr=False)
     """The `digest` a loaded plan was saved with (`None`: made in this
     process); `Repo._verify_plan` refuses a plan whose content no longer
@@ -275,6 +276,7 @@ class Plan:
     def _content(self) -> dict[str, Any]:
         return {
             "format": PLAN_FORMAT,
+            "tether_version": self.tether_version,
             "command": self.command,
             "created_at": self.created_at,
             "context": self.context,
@@ -306,10 +308,22 @@ class Plan:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Plan:
+        """Load a saved plan.
+
+        Raises:
+            StalePlanError: Another tether version made the plan, or it
+                records none (saved before plans recorded it).
+            ConfigError: The plan's format is not :data:`PLAN_FORMAT`.
+        """
+        made_by = data.get("tether_version")
+        running = _running_version()
+        if made_by != running:
+            maker = f"tether {made_by}" if made_by else "an older tether"
+            raise StalePlanError(
+                f"this plan was made by {maker}; this is tether {running}: "
+                "re-run the plan"
+            )
         fmt = int(data.get("format", PLAN_FORMAT))
-        # Legacy, removed at 0.1.0: the format 1 and 2 refusal
-        if fmt in _UNBOUND_FORMATS:
-            raise StalePlanError(f"{_UNBOUND_FORMATS[fmt]}; re-run the plan")
         if fmt != PLAN_FORMAT:
             raise ConfigError(f"unsupported plan format {fmt!r}")
         return cls(
@@ -321,6 +335,7 @@ class Plan:
                 Precondition.from_dict(p) for p in data.get("preconditions", [])
             ],
             created_at=str(data.get("created_at", "")),
+            tether_version=running,
             # A saved plan with no digest was edited as surely as one with
             # the wrong digest.
             saved_digest=str(data.get("digest") or ""),

@@ -19,6 +19,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `tether recover` lists tether's refs in each store by dataset id and prints
   the steps that take back a dataset whose repository was lost.
 
+### Changed
+
+- A saved plan (`--plan FILE`) records the tether version that made it, and
+  `--from-plan` applies it only under that version. Plans saved by any other
+  version, including every earlier release, are refused: re-run the plan.
+
 ### Fixed
 
 - `tether new --shared` can join a bookmark whose branch is being written,
@@ -30,8 +36,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in the stores the target revision names, which differ when an object was
   moved.
 - Applying a saved `new` plan refuses to adopt a branch that has a newer
-  generation (`.2`) or is gone, even for a plan saved by 0.1.0b5, which
-  bound an adopt to its head only.
+  generation (`.2`) or is gone. 0.1.0b5's plans bound an adopt to its head
+  only, which a newer generation leaves as it was.
 - `restore --at` and `add --at` refuse an empty or blank `REF`. An unset
   variable (`--at "$UNSET"`) used to reset the branch from the upstream head.
 - `tether recover` lists per-workspace branches from before bookmarks, which

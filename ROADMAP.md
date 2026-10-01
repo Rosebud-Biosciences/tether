@@ -151,6 +151,10 @@ Outside `tether.upgrade` and `tests/upgrade/` (both go wholesale), every
 legacy-only site in `src/`, `tests/` and `user_guide/` carries the marker
 `Legacy, removed at 0.1.0` (a `#` comment in code, an HTML comment in the
 guide): `rg 'Legacy, removed at 0.1.0'` lists them, and none may remain.
+Saved plans need nothing: a plan applies only under the tether version that
+made it (`Plan.tether_version`, checked at load), so no release reads
+another's plans, and the old-plan compatibility (the `ref_head` alternative
+for an adopt, the format 1 and 2 refusals) is already gone.
 
 - the `tether.upgrade` package and `tests/upgrade/`, the `upgrade` CLI
   command, and the thin `Repo.plan_upgrade` / `apply_upgrade` / `upgrade`
@@ -169,12 +173,6 @@ guide): `rg 'Legacy, removed at 0.1.0'` lists them, and none may remain.
   its `legacy` JSON key (a documented output change, for the changelog), its
   `restore --at` step and CLI lines, the half of its test that covers them,
   and the recovery step in the troubleshooting guide;
-- the `ref_head` alternative for an `adopt` in
-  `REQUIRED_ACTION_PRECONDITIONS["new"]` (plans saved by 0.1.0b5),
-  `_require_adopted_present`, which `ref_present` makes redundant then, and
-  the two tests that build b5-shaped plans by hand;
-- the refusals of plan formats 1 and 2 (`_UNBOUND_FORMATS`): they collapse
-  into the one "unsupported plan format" refusal;
 - seeding the pin-ownership index (`tether-pinned.jsonl`) from the op logs
   (`Repo._seed_pinned`), for clones made before the index: **decide** then
   whether to move it into the last beta's `upgrade` or keep it. Kept, nothing

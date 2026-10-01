@@ -3783,14 +3783,15 @@ def test_new_binds_a_branch_it_keeps_or_resets_to_its_head(vcs_root: Path) -> No
         assert store.resolve(system, wref) == moved
 
 
+@pytest.mark.parametrize("made_by", [None, "0.1.0b4"])
 @pytest.mark.parametrize("how", ["--shared", "--adopt"])
-def test_a_saved_new_plan_that_bound_an_adopt_to_its_head_still_applies(
-    vcs_root: Path, tmp_path: Path, how: str
+def test_a_saved_new_plan_that_bound_an_adopt_to_its_head_is_refused(
+    vcs_root: Path, tmp_path: Path, how: str, made_by: str | None
 ) -> None:
-    # Legacy, removed at 0.1.0: builds a 0.1.0b5-shaped adopt plan by hand
     """Plans saved by 0.1.0b5 and earlier bound each `adopt` to the head they
-    saw (`ref_head`). Such a plan still verifies, and binds as it did:
-    refused while the head is elsewhere, applied once it is back."""
+    saw (`ref_head`), which a newer generation beside the branch leaves as
+    it was. Such a plan is another tether's, refused at load before any of
+    its checks; one of this tether's shaped like it lacks `ref_present`."""
     from tether.plan import Plan, Precondition
 
     b, system, ref = _joining_clone(vcs_root, tmp_path)
@@ -3798,8 +3799,6 @@ def test_a_saved_new_plan_that_bound_an_adopt_to_its_head_still_applies(
     plan = b.plan_new(bookmark="feat", shared=how == "--shared", adopt=how == "--adopt")
     (adopt,) = plan.actions
     assert adopt.op == "adopt" and adopt.target == ref
-    # What an older tether saved: no `descends_from`, and a `ref_head` where
-    # `ref_present` (and `ref_descends`) stand now -- under its own digest.
     adopt.params.pop("descends_from", None)
     present = next(p for p in plan.preconditions if p.kind == "ref_present")
     plan.preconditions = [
@@ -3809,61 +3808,22 @@ def test_a_saved_new_plan_that_bound_an_adopt_to_its_head_still_applies(
         for p in plan.preconditions
         if p.kind != "ref_descends"
     ]
-    old = Plan.from_json(plan.to_json())
-    assert not old.edited() and old.missing_preconditions() == []
-    assert [p.kind for p in old.preconditions if p.key == "db"] == ["ref_head"]
-
-    head = store.resolve(system, ref)
-    store.write(system, ref, {"base": 1, "a": 2})
-    with pytest.raises(StalePlanError, match="moved since the plan was made"):
-        b.apply_new(old)
-    assert "feat" not in b.vcs.bookmarks()
-    store.system(system).branches[ref] = head
-    b.apply_new(old)
-    assert b.workspace.working_refs["db"] == ref
-    assert store.resolve(system, ref) == head
-
-
-@pytest.mark.parametrize("how", ["--shared", "--adopt"])
-def test_a_saved_new_plan_bound_to_a_head_refuses_a_superseded_branch(
-    vcs_root: Path, tmp_path: Path, how: str
-) -> None:
-    # Legacy, removed at 0.1.0: builds a 0.1.0b5-shaped adopt plan by hand
-    """A newer generation beside the adopted branch leaves its head as it
-    was, so a plan saved by 0.1.0b5 (`ref_head` only) passed its own checks
-    and adopted the stale branch. Apply checks every adopt's branch is
-    still the newest generation, whatever the plan carries."""
-    from tether.plan import Plan, Precondition
-
-    b, system, ref = _joining_clone(vcs_root, tmp_path)
-    store = default_store()
-    plan = b.plan_new(bookmark="feat", shared=how == "--shared", adopt=how == "--adopt")
-    (adopt,) = plan.actions
-    adopt.params.pop("descends_from", None)
-    present = next(p for p in plan.preconditions if p.kind == "ref_present")
-    plan.preconditions = [
-        Precondition("ref_head", adopt.params["head"], key="db", params=present.params)
-        if p is present
-        else p
-        for p in plan.preconditions
-        if p.kind != "ref_descends"
-    ]
-    old = Plan.from_json(plan.to_json())
-    assert not old.edited() and old.missing_preconditions() == []
-    assert {p.kind for p in old.preconditions} & {
-        "ref_present",
-        "ref_descends",
-    } == set()
-
+    old = plan.to_dict()
+    if made_by is None:
+        del old["tether_version"]
+    else:
+        old["tether_version"] = made_by
     sys = store.system(system)
     sys.branches[f"{ref}.2"] = sys.branches[ref]
-    with pytest.raises(StalePlanError, match=rf"{ref} is superseded by {ref}\.2"):
-        b.apply_new(old)
+
+    with pytest.raises(StalePlanError, match=r"made by .*; this is tether .*re-run"):
+        b.apply_new(Plan.from_dict(old))
+    mine = Plan.from_json(plan.to_json())
+    assert mine.missing_preconditions() == ["ref_present for 'db'"]
+    with pytest.raises(StalePlanError, match="lacks the ref_present for 'db'"):
+        b.apply_new(mine)
     assert "feat" not in b.vcs.bookmarks()
     assert ref not in b.workspace.working_refs.values()
-    del sys.branches[f"{ref}.2"]
-    b.apply_new(old)
-    assert b.workspace.working_refs["db"] == ref
 
 
 def test_a_new_whose_fork_a_peer_beat_points_at_shared_not_at_a_reset(

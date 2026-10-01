@@ -156,9 +156,11 @@ applies a saved plan, so it refuses `--dry-run` and `--plan`. `gc` and
 write with no plan; `publish` has `--dry-run` but no `--plan`.
 
 Apply checks the plan's preconditions again, and refuses with
-`StalePlanError` when anything moved. A saved plan is format 3, whose
-`digest` makes an edited plan fail; formats 1 and 2 are refused with
-"re-run the plan". What each plan checks, and which bind to their checkout:
+`StalePlanError` when anything moved. A saved plan is valid only for the
+tether version that made it: any other version, older or newer, refuses it
+with "re-run the plan", so plan again after upgrading `tether-vcs`. Its
+`digest` makes an edited plan fail. What each plan checks, and which bind
+to their checkout:
 [What a plan checks](05-reclaiming-storage.qmd#what-a-plan-checks-before-it-applies).
 
 ```
@@ -602,7 +604,7 @@ Experimental; see [Registries and SQL](10-registries-and-sql.qmd).
 | `repair` | `{"repinned": {key: pin_id}, "reforked": {key: ref}, "failed": {target: reason}, "notes": [str]}`; with `--dry-run`: the plan |
 | `recover` | `{"dataset_id", "trunk", "pinned": bool, "suggested_dataset_id": id or null, "scoped": bool, "objects": [{"key", "kind", "holds_refs": bool, "error": str or null, "missing_pin": pin_id or null, "unrecognized": [refs], "datasets": [D]}], "datasets": [D], "steps": [str]}` where `D` is `{"dataset_id", "current": bool, "pins": count, "bookmarks": [{"bookmark", "branch", "generation": n or null, "branches": [refs]}], "legacy": [{"workspace", "branches": [refs]}]}`; <!-- Legacy, removed at 0.1.0: recover's `legacy` key --> the top-level `datasets` merges every object's; `scoped` (keys given) means no id is suggested |
 | `upgrade` | `{"from_version", "to_version", "renamed_pins": {old ref: new ref}, "renamed_branches": {old: new}, "rewritten_commits": {old id: new id}, "refingerprinted": [keys], "rewritten_manifests": [keys], "rewritten_indexes": {file: records}, "copied_listings": [names], "failed": {target: reason}, "vcs_commit"}`; with `--dry-run`: the plan |
-| plan | `{"format": 3, "command", "created_at", "context": {...}, "notes": [str], "preconditions": [{"kind", "expected", "key", "params": {...}, "detail"}], "actions": [{"op", "key", "kind", "target", "detail", "params": {...}}], "digest"}`: what `--plan FILE` writes and `--from-plan` reads. `digest` is the SHA-256 of the rest; precondition kinds are `tether.plan.PRECONDITION_KINDS`. |
+| plan | `{"format": 3, "tether_version", "command", "created_at", "context": {...}, "notes": [str], "preconditions": [{"kind", "expected", "key", "params": {...}, "detail"}], "actions": [{"op", "key", "kind", "target", "detail", "params": {...}}], "digest"}`: what `--plan FILE` writes and `--from-plan` reads, only under the same `tether_version`. `digest` is the SHA-256 of the rest; precondition kinds are `tether.plan.PRECONDITION_KINDS`. |
 | `export` | `{"path", "format", "head", "rows": {table: count}}` |
 | `publish` | `{"schema", "head", "upserted": {table: count}, "skipped_commits"}`; with `--dry-run`: the plan (one `upsert` action per table) |
 | `import` | `{"added": [keys], "updated": [keys], "removed": [keys], "unchanged": [keys]}`; with `--dry-run`: the plan |

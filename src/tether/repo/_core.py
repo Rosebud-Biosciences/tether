@@ -1723,7 +1723,8 @@ class RepoCore:
         and raises :class:`~tether.errors.StalePlanError` with the plan's own
         message on the first mismatch. A saved plan applied later, or a slow
         apply, therefore acts on the world it was reviewed against or not at
-        all.
+        all. Which tether made a saved plan is checked earlier, when it is
+        loaded (:meth:`tether.plan.Plan.from_dict`), for every command.
 
         Not here, by design: checks that are races *during* apply and are
         handled per action -- gc's post-preflight branch move (reported as
@@ -1743,10 +1744,9 @@ class RepoCore:
         missing = plan.missing_preconditions()
         if missing:
             raise StalePlanError(
-                f"this {command} plan predates the {', '.join(missing)} "
-                "precondition(s) tether now requires (it was saved by an older "
-                "tether, or edited) and cannot be trusted to apply where it was "
-                "reviewed; re-run the plan"
+                f"this {command} plan lacks the {', '.join(missing)} "
+                "precondition(s) tether requires of it (it was edited) and "
+                "cannot be trusted to apply where it was reviewed; re-run the plan"
             )
         if plan.edited():
             raise StalePlanError(

@@ -682,30 +682,6 @@ class ForkOps(RepoCore):
                 )
         return plan
 
-    def _require_adopted_present(self, plan: Plan) -> None:
-        # Legacy, removed at 0.1.0: the presence check for 0.1.0b5 adopts
-        # (`ref_present` does it once the `ref_head` alternative goes)
-        """Refuse a `new` plan unless every branch it adopts is still there
-        and still the newest generation of its bookmark's branch, checked in
-        the store the target's manifests name whatever preconditions the plan
-        carries: a plan saved by 0.1.0b5 binds an adopt to its head only,
-        which a newer generation beside it leaves unchanged."""
-        adopts = [a for a in plan.actions if a.op == "adopt"]
-        if not adopts:
-            return
-        rev = plan.context.get("rev")
-        objects = self._objects_at(self.vcs.resolve(str(rev))) if rev else self.objects
-        for a in adopts:
-            m = objects.get(a.key)
-            if m is None:
-                raise StalePlanError(
-                    f"new {a.key}: not registered at the target any more; "
-                    "re-run the plan"
-                )
-            self._require_present(
-                self.backend_for(m.kind), dict(m.locator), a.target, what=f"new {a.key}"
-            )
-
     def apply_new(self: Repo, plan: Plan, *, verify: bool = True) -> None:
         """Execute a plan from `plan_new`: move the VCS working copy, fork, record refs.
 
@@ -720,9 +696,6 @@ class ForkOps(RepoCore):
         # the plan reviewed, which also holds against a clone elsewhere.
         with self._writer_lock(), self._repo_lock():
             self._verify_plan(plan, "new", verify=verify)
-            # Legacy, removed at 0.1.0: the 0.1.0b5 adopt check's call
-            if verify:
-                self._require_adopted_present(plan)
             refused = [a for a in plan.actions if a.op == "refuse"]
             if refused:
                 if all(a.key for a in refused):

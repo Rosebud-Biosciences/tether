@@ -59,20 +59,24 @@ visible in a saved plan's JSON). Every `apply_*` runs them all before its
 first action, and the first mismatch stops the whole apply with
 `StalePlanError`. So a stale plan does nothing at all.
 
+A saved plan is valid only for the tether version that made it: it records
+that version (`tether_version`), and any other tether refuses to load it
+("this plan was made by tether X; this is tether Y: re-run the plan"), as
+it does every plan saved before plans recorded one ("made by an older
+tether"). After upgrading `tether-vcs`, plan again.
+
 Each command *requires* some kinds, so a plan that lacks one is refused as
-stale ("predates the ... precondition(s) tether now requires"). A saved plan
-also carries a `digest` over its actions, context and preconditions (plan
-format 3). An edited plan fails the digest, so a dropped action or a changed
-target cannot apply under checks that describe another plan. The digest
-detects edits; it does not authenticate, since whoever can write the file
-can recompute it. Plans saved before 0.1.0b4 (format 2, no digest) or
-0.1.0b1 (format 1, no preconditions) are refused with "re-run the plan".
-<!-- Legacy, removed at 0.1.0: the sentence on formats 1 and 2 -->
+stale ("lacks the ... precondition(s) tether requires of it"). A saved plan
+also carries a `digest` over its version, actions, context and
+preconditions. An edited plan fails the digest, so a dropped action or a
+changed target cannot apply under checks that describe another plan. The
+digest detects edits; it does not authenticate, since whoever can write the
+file can recompute it.
 
 | Command | Required preconditions | Per object |
 | --- | --- | --- |
 | `commit` | `workspace_id`, `workspace_bookmark`, `manifest_hash` | -- |
-| `new` | `workspace_id`, `manifest_hash` | each `fork`: `ref_head` (the branch exists) or `ref_absent`; each `reuse`: `ref_head`; each `adopt`: `ref_present` (`ref_head` in plans saved by 0.1.0b5) <!-- Legacy, removed at 0.1.0: the parenthesis --> |
+| `new` | `workspace_id`, `manifest_hash` | each `fork`: `ref_head` (the branch exists) or `ref_absent`; each `reuse`: `ref_head`; each `adopt`: `ref_present` |
 | `restore` | `workspace_id`, `workspace_bookmark`, `manifest_hash` | each `fork`: `ref_head` or `ref_absent` |
 | `promote` | `workspace_id`, `workspace_bookmark`, `bookmark_head`, `manifest_hash` | each `fast-forward` or `merge`: `base_state`, and `ref_head` or `pin_state` |
 | `drop` | `workspace_id`, `workspace_bookmark`, `bookmark_head`, `no_new_holders`, `vcs_head`, `history_digest` | -- |

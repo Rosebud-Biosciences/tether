@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+import tether
 from tether.backends.memory import default_store
 from tether.errors import ConfigError, StalePlanError
 from tether.manifest import CONFIG_VERSION, Pin, compute_pin_id
@@ -36,37 +37,133 @@ def _mem(repo: Repo, key: str = "db") -> str:
     return name
 
 
-def test_plan_round_trips_preconditions_and_refuses_format_1() -> None:
+def test_plan_round_trips_preconditions_and_its_tether_version() -> None:
     plan = Plan(command="gc")
     plan.require("manifest_hash", "abc", detail="manifests changed")
     plan.require("ref_head", {"snapshot_id": "s1"}, key="db", backend="memory", ref="r")
     data = json.loads(plan.to_json())
     assert data["format"] == PLAN_FORMAT == 3
+    assert data["tether_version"] == plan.tether_version == tether.__version__
     assert data["digest"] == plan.digest()
     again = Plan.from_dict(data)
     assert again.preconditions == plan.preconditions
     assert again.preconditions[1].params == {"backend": "memory", "ref": "r"}
+    assert again.tether_version == tether.__version__
     assert again.digest() == plan.digest() and not again.edited()
     with pytest.raises(ValueError, match="unknown precondition kind"):
         plan.require("not-a-kind")
     with pytest.raises(ConfigError, match="unknown plan precondition"):
         Precondition.from_dict({"kind": "nope"})
-    # Legacy, removed at 0.1.0: the format 1 and 2 refusals (format 1 and 2
-    # then fall under "unsupported plan format", as 99 does below)
-    # A plan saved before 0.1.0b1 carries no preconditions, one saved before
-    # 0.1.0b4 no digest: refused, re-plan.
-    data["format"] = 1
-    with pytest.raises(StalePlanError, match=r"format 1 predates 0\.1\.0b1"):
-        Plan.from_dict(data)
-    data["format"] = 2
-    del data["digest"]
-    with pytest.raises(
-        StalePlanError, match=r"format 2 predates 0\.1\.0b4.*re-run the plan"
-    ):
-        Plan.from_dict(data)
     data["format"] = 99
     with pytest.raises(ConfigError, match="unsupported plan format"):
         Plan.from_dict(data)
+
+
+def _made_by(data: dict, made_by: str) -> str:
+    """Make the saved plan `data` look made by another tether, in place: no
+    version (any plan saved before plans recorded it), another version, or
+    the older plan formats -- 1 had no preconditions, 2 no digest. Returns
+    who the refusal names."""
+    if made_by in ("format 1", "format 2"):
+        data["format"] = int(made_by[-1])
+        del data["digest"]
+        if made_by == "format 1":
+            del data["preconditions"]
+    if made_by in ("no version", "format 1", "format 2"):
+        del data["tether_version"]
+        return "an older tether"
+    data["tether_version"] = made_by
+    return f"tether {made_by}"
+
+
+OTHER_TETHERS = [
+    "no version",
+    "format 1",
+    "format 2",
+    "0.1.0b4",
+    f"{tether.__version__}+local",
+    "99.0",
+]
+
+
+@pytest.mark.parametrize("made_by", OTHER_TETHERS)
+def test_a_saved_plan_loads_only_under_the_tether_that_made_it(made_by: str) -> None:
+    """What a plan's checks mean, and how apply reads its actions, are the
+    version's that made it; nothing reads another version's plans. A plan
+    another tether made -- or one from before plans recorded a version, in
+    whatever format -- is refused at load, before its format or any check,
+    with what to do: re-run it."""
+    plan = Plan(command="gc")
+    plan.require("history_digest", "abc", detail="history changed")
+    plan.require("workspace_id", "0" * 32)
+    data = plan.to_dict()
+    who = _made_by(data, made_by)
+    expected = (
+        f"this plan was made by {who}; this is tether {tether.__version__}: "
+        "re-run the plan"
+    )
+    with pytest.raises(StalePlanError) as exc:
+        Plan.from_dict(data)
+    assert str(exc.value) == expected
+    with pytest.raises(StalePlanError) as exc:
+        Plan.from_json(json.dumps(data))
+    assert str(exc.value) == expected
+
+
+def test_the_tether_version_is_part_of_the_digest(vcs_root: Path) -> None:
+    """A plan another tether made, its version edited to this one's, is an
+    edited plan: refused as one, nothing applied."""
+    repo = Repo.init(vcs_root)
+    _mem(repo)
+    plan = repo.plan_commit("m")
+    plan.tether_version = "0.1.0b4"
+    data = plan.to_dict()
+    data["tether_version"] = tether.__version__
+    forged = Plan.from_dict(data)
+    assert forged.edited()
+    with pytest.raises(StalePlanError, match="edited after it was saved"):
+        repo.apply_commit(forged)
+    assert repo.objects["db"].state is None
+
+
+@pytest.mark.parametrize("made_by", ["no version", "format 2", "0.1.0b4"])
+def test_every_command_refuses_a_saved_plan_another_tether_made(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, made_by: str
+) -> None:
+    """Every command that applies a saved plan reads it through the gate:
+    `--from-plan` exits 1 with the refusal and writes nothing."""
+    typer_testing = pytest.importorskip("typer.testing")
+    from tether.cli import app
+
+    runner = typer_testing.CliRunner()
+    repo = Repo.init(vcs_root)
+    _mem(repo)
+    repo.commit("baseline")
+    monkeypatch.chdir(vcs_root)
+    head, journaled = repo._vcs_head_or_none(), len(repo.ops())
+    plan_file = tmp_path / "plan.json"
+    commands = {
+        "commit": [],
+        "new": [],
+        "restore": ["db"],
+        "promote": [],
+        "drop": ["main"],
+        "gc": [],
+        "repair": [],
+        "forget-workspace": [],
+        "import": [str(tmp_path / "rows.jsonl")],
+        "upgrade": [],
+    }
+    for command, args in commands.items():
+        data = Plan(command=command).to_dict()
+        who = _made_by(data, made_by)
+        plan_file.write_text(json.dumps(data))
+        r = runner.invoke(app, [command, *args, "--from-plan", str(plan_file)])
+        assert r.exit_code == 1, (command, r.output)
+        assert f"this plan was made by {who}; this is tether " in r.stderr, command
+        assert "re-run the plan" in r.stderr, command
+    fresh = Repo.find(vcs_root)
+    assert fresh._vcs_head_or_none() == head and len(fresh.ops()) == journaled
 
 
 def test_every_command_plan_carries_its_preconditions(vcs_root: Path) -> None:
@@ -343,8 +440,8 @@ def test_verify_plan_checks_each_kind(
 
 
 def test_a_plan_missing_a_required_precondition_is_refused(vcs_root: Path) -> None:
-    """A plan supplies its own preconditions, so one saved by an older tether
-    (or edited) could apply anywhere. Every command has a required set, per
+    """A plan supplies its own preconditions, so one edited along with its
+    digest could apply anywhere. Every command has a required set, per
     action for the per-object kinds; a plan short of it is stale."""
     repo = Repo.init(vcs_root)
     _mem(repo)
@@ -356,7 +453,7 @@ def test_a_plan_missing_a_required_precondition_is_refused(vcs_root: Path) -> No
     ]
     old = Plan.from_dict(data)
     assert old.missing_preconditions() == ["workspace_bookmark"]
-    with pytest.raises(StalePlanError, match="predates the workspace_bookmark"):
+    with pytest.raises(StalePlanError, match="lacks the workspace_bookmark"):
         repo.apply_commit(old)
     assert repo.objects["db"].state is None  # nothing was pinned
 
@@ -377,7 +474,7 @@ def test_a_plan_missing_a_required_precondition_is_refused(vcs_root: Path) -> No
         p for p in gc["preconditions"] if p["kind"] != "workspace_id"
     ]
     gc["context"]["workspace_id"] = "0" * 32
-    with pytest.raises(StalePlanError, match="predates the workspace_id"):
+    with pytest.raises(StalePlanError, match="lacks the workspace_id"):
         repo.apply_gc(Plan.from_dict(gc))
     # `verify=False` (plan and apply in one call) skips the requirement.
     repo.apply_commit(old, verify=False)
@@ -402,7 +499,7 @@ def test_new_binds_an_object_only_the_target_registers(
 ) -> None:
     """`new` plans from the target's manifests but bound each branch through
     the checkout's, skipping objects the checkout lacks: the plan then missed
-    their checks and was refused as one an older tether saved."""
+    their checks and was refused as lacking them."""
     repo = Repo.init(vcs_root)
     system = _bookmark_with_an_extra_object(repo)
     wref = f"tether.ws.{repo.config.dataset_id}.feat"
