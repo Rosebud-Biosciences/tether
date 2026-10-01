@@ -1343,10 +1343,13 @@ def recover(
     Read-only. Lists tether's refs in each registered object's store -- pins
     `tether.<dataset>.<hash>` and working branches
     `tether.ws.<dataset>.<bookmark>` -- by the dataset id they carry, marks
-    the one tether.toml names, and prints the steps: the id to set while
-    nothing is pinned under this one, a `commit` on the trunk, then `new -b
-    BOOKMARK TRUNK --adopt` and a `commit` per bookmark. Exit 1 if a store
-    could not be listed.
+    the one tether.toml names, and prints the steps: `repair` where a
+    manifest names a pin its store lacks, the id to set while nothing is
+    pinned under this one, a `commit` on the trunk, then `new BOOKMARK
+    --adopt` (`-b BOOKMARK TRUNK` where the VCS has no such bookmark) and a
+    `commit` per bookmark, and a `restore --at` per legacy per-workspace
+    branch. With KEYs no dataset id is suggested: it applies to every
+    object. Exit 1 if a store could not be listed.
     """
     repo = _repo()
     try:
@@ -1367,7 +1370,7 @@ def recover(
             typer.echo(f"{label}  error")
             typer.secho(f"{o.key}: {o.error}", fg=typer.colors.RED, err=True)
             continue
-        if not o.holds_refs or not o.namespaces:
+        if not o.holds_refs or not (o.namespaces or o.unrecognized or o.missing_pin):
             typer.echo(f"{label}  {'makes no refs' if not o.holds_refs else 'none'}")
             continue
         typer.echo(label)
@@ -1383,6 +1386,14 @@ def recover(
             typer.echo(
                 f"    {ds}{mine}: {len(refs.pins)} pin(s); bookmarks: {marks or 'none'}"
             )
+            for ws, branches in sorted(refs.legacy.items()):
+                typer.echo(
+                    f"      legacy branches of workspace {ws}: {', '.join(branches)}"
+                )
+        if o.missing_pin is not None:
+            typer.echo(f"    pin {o.missing_pin} (the manifest's) is missing")
+        if o.unrecognized:
+            typer.echo(f"    no dataset id: {', '.join(o.unrecognized)}")
     typer.echo("next steps:")
     for n, step in enumerate(report.steps, 1):
         first, *rest = step.split("\n")

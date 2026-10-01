@@ -369,6 +369,10 @@ class RecoveredRefs:
     bookmarks: dict[str, list[str]] = field(default_factory=dict)
     """Bookmark, as its ref names it (`bookmark_slug`) -> its working
     branches, lowest generation first: the last is what `new --adopt` takes."""
+    legacy: dict[str, list[str]] = field(default_factory=dict)
+    """Workspace id -> its per-workspace working branches, named before
+    bookmarks (`tether.ws.<dataset>.<workspace>.<key>`): `new --adopt` does
+    not take them, `restore --at` copies one."""
 
     def merge(self, other: RecoveredRefs) -> None:
         self.pins |= other.pins
@@ -376,6 +380,10 @@ class RecoveredRefs:
             mine = self.bookmarks.setdefault(slug, [])
             mine.extend(r for r in refs if r not in mine)
             mine.sort(key=lambda ref: working_ref_generation(ref) or 1)
+        for ws, refs in other.legacy.items():
+            mine = self.legacy.setdefault(ws, [])
+            mine.extend(r for r in refs if r not in mine)
+            mine.sort()
 
     def to_dict(self, current: str) -> dict[str, Any]:
         return {
@@ -390,6 +398,10 @@ class RecoveredRefs:
                     "branches": list(refs),
                 }
                 for slug, refs in sorted(self.bookmarks.items())
+            ],
+            "legacy": [
+                {"workspace": ws, "branches": list(refs)}
+                for ws, refs in sorted(self.legacy.items())
             ],
         }
 
@@ -409,6 +421,12 @@ class RecoveredObject:
     object has none to find."""
     error: str | None = None
     """Why the store's refs could not be listed, if they could not."""
+    missing_pin: str | None = None
+    """The pin id this checkout's manifest names that the store's pins
+    lack; `repair` recreates it, a `commit` does not."""
+    unrecognized: list[str] = field(default_factory=list)
+    """Refs named like tether's (`tether.ws.*`, pins) that carry no dataset
+    id tether can read."""
 
     def to_dict(self, current: str) -> dict[str, Any]:
         return {
@@ -416,6 +434,8 @@ class RecoveredObject:
             "kind": self.kind,
             "holds_refs": self.holds_refs,
             "error": self.error,
+            "missing_pin": self.missing_pin,
+            "unrecognized": list(self.unrecognized),
             "datasets": [
                 self.namespaces[ds].to_dict(current) for ds in sorted(self.namespaces)
             ],
@@ -438,7 +458,11 @@ class RecoverReport:
     manifest names a pin, or a store holds one. Its id cannot change then."""
     suggested_id: str | None = None
     """The one other dataset id the stores hold refs for, to set in
-    `tether.toml` while nothing is pinned under this one yet."""
+    `tether.toml` while nothing is pinned under this one yet; never for a
+    `scoped` report."""
+    scoped: bool = False
+    """Whether only some objects were listed (`recover KEY...`): the id
+    applies to every object, so a scoped report advises none."""
     steps: list[str] = field(default_factory=list)
     """The commands to run, in order."""
 
@@ -458,6 +482,7 @@ class RecoverReport:
             "trunk": self.trunk,
             "pinned": self.pinned,
             "suggested_dataset_id": self.suggested_id,
+            "scoped": self.scoped,
             "objects": [o.to_dict(self.dataset_id) for o in self.objects],
             "datasets": [found[ds].to_dict(self.dataset_id) for ds in sorted(found)],
             "steps": list(self.steps),

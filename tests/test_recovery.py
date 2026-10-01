@@ -13,7 +13,7 @@ import pytest
 
 from tether.backends.memory import default_store
 from tether.errors import ConfigError, StalePlanError, TetherError
-from tether.manifest import RepoConfig, read_config
+from tether.manifest import RepoConfig, bookmark_slug, read_config
 from tether.plan import Plan
 from tether.repo import Repo
 
@@ -771,6 +771,7 @@ def test_recover_groups_refs_by_dataset_and_says_what_to_run(
                 "branches": [f"tether.ws.{old}.feat"],
             },
         ],
+        "legacy": [],
     }
 
     # Once this dataset has pinned under its own id, the id stays.
@@ -794,7 +795,7 @@ def test_cli_recover(
     repo = _recovered(lost, tmp_path_factory, dataset_id="12345678")
     monkeypatch.chdir(repo.root)
 
-    r = runner.invoke(app, ["recover", "db"])
+    r = runner.invoke(app, ["recover"])
     assert r.exit_code == 0, r.output
     assert "dataset id 12345678 (tether.toml)" in r.stdout
     assert f"{old}: 2 pin(s); bookmarks: feat" in r.stdout
@@ -810,17 +811,20 @@ def test_cli_recover(
         "trunk",
         "pinned",
         "suggested_dataset_id",
+        "scoped",
         "objects",
         "datasets",
         "steps",
     }
-    assert payload["suggested_dataset_id"] == old
+    assert payload["suggested_dataset_id"] == old and not payload["scoped"]
     rows = {o["key"]: o for o in payload["objects"]}
     assert rows["gone"] == {
         "key": "gone",
         "kind": "memory",
         "holds_refs": True,
         "error": None,
+        "missing_pin": None,
+        "unrecognized": [],
         "datasets": [],
     }
     (found,) = rows["db"]["datasets"]
@@ -858,6 +862,164 @@ def test_recover_suggests_nothing_while_a_store_cannot_be_listed(
     finally:
         default_store().deleted.discard(gone)
     assert repo.recover_report().suggested_id == lost.config.dataset_id
+
+
+def test_recover_lists_legacy_and_unreadable_branches(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per-workspace branches named before bookmarks were dropped, so recover
+    could say "no tether refs" while one held the only copy of uncommitted
+    writes; refs named like tether's with no readable id were dropped too."""
+    monkeypatch.chdir(vcs_root)
+    repo = Repo.init(vcs_root)
+    system = _mem(repo)
+    odd = _mem(repo, "odd")
+    store = default_store()
+    ds = repo.config.dataset_id
+    legacy = f"tether.ws.{ds}.ab12cd34.db-0a1b2c"
+    head = store.write(system, legacy, {"uncommitted": 1})
+    store.write(odd, "tether.ws.not-a-dataset", {"x": 1})
+
+    report = repo.recover_report(["db"])
+    (found,) = report.datasets.values()
+    assert found.legacy == {"ab12cd34": [legacy]}
+    assert not found.bookmarks and not found.pins
+    assert report.to_dict()["datasets"][0]["legacy"] == [
+        {"workspace": "ab12cd34", "branches": [legacy]}
+    ]
+    assert report.steps[0] == 'tether commit -m "Recover main"'
+    assert report.steps[1] == (
+        f"{legacy} is a legacy branch of workspace ab12cd34 (named before "
+        "bookmarks) and may hold writes no commit pins: on a bookmark, "
+        f"`tether restore db --at {legacy}` copies it"
+    )
+    (row,) = repo.recover_report(["odd"]).objects
+    assert row.unrecognized == ["tether.ws.not-a-dataset"] and not row.namespaces
+    (step,) = repo.recover_report(["odd"]).steps
+    assert step.startswith("tether.ws.not-a-dataset look like tether's")
+    for keys in (["db"], ["odd"], None):
+        steps = repo.recover_report(keys).steps
+        assert not any("no tether refs" in s for s in steps), keys
+    r = runner.invoke(app, ["recover"])
+    assert r.exit_code == 0, r.output
+    assert f"legacy branches of workspace ab12cd34: {legacy}" in r.stdout
+    assert "no dataset id: tether.ws.not-a-dataset" in r.stdout
+    assert "no tether refs" not in r.stdout
+
+    # The step does what it says.
+    repo.commit("Recover main")
+    repo.new(bookmark="feat")
+    repo.restore(["db"], at=legacy)
+    wref = repo.workspace.working_refs["db"]
+    assert store.system(system).branches[wref] == head
+
+
+def test_a_scoped_recover_advises_no_dataset_id(
+    vcs_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """The dataset id applies to every object; advice drawn from a subset of
+    the stores may name the wrong one."""
+    lost, system, _head = _lost_bookmark(vcs_root)
+    old = lost.config.dataset_id
+    repo = _recovered(lost, tmp_path_factory, dataset_id="12345678")
+    assert repo.recover_report().suggested_id == old
+
+    report = repo.recover_report(["db"])
+    assert report.scoped and report.suggested_id is None
+    (step,) = report.steps
+    assert f"the refs are {old}'s, not 12345678's" in step
+    assert "run `tether recover` without keys before choosing it" in step
+    assert "[dataset]" not in step and "commit" not in step
+    monkeypatch.chdir(repo.root)
+    r = runner.invoke(app, ["recover", "db", "--json"])
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.stdout)
+    assert payload["scoped"] and payload["suggested_dataset_id"] is None
+    r = runner.invoke(app, ["recover", "db"])
+    assert "without keys" in r.stdout and 'id = "' not in r.stdout
+
+    # Under this dataset's own id, another dataset's refs beside it: the
+    # closing advice names no id either.
+    other = "fedcba98"
+    default_store().system(system).branches[f"tether.ws.{other}.side"] = "x"
+    mine = _recovered(lost, tmp_path_factory)
+    assert f"--dataset-id {other}`" in mine.recover_report().steps[-1]
+    last = mine.recover_report(["db"]).steps[-1]
+    assert "--dataset-id ID`" in last and "without keys" in last
+
+
+def test_recover_steers_a_missing_pin_to_repair(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A manifest naming a pin its store lacks: `commit` does not recreate
+    it (the state is unchanged), `repair` does."""
+    monkeypatch.chdir(vcs_root)
+    repo = Repo.init(vcs_root)
+    system = _mem(repo)
+    repo.commit("baseline")
+    pin = repo.objects["db"].pin
+    assert pin is not None
+    sys = default_store().system(system)
+    del sys.tags[pin.ref]
+
+    report = repo.recover_report()
+    (row,) = report.objects
+    assert row.missing_pin == pin.id
+    (step,) = report.steps
+    assert step.startswith("tether repair  (the manifests of db name pins")
+    assert "no tether refs" not in step
+    r = runner.invoke(app, ["recover", "--json"])
+    (row,) = json.loads(r.stdout)["objects"]
+    assert row["missing_pin"] == pin.id
+    r = runner.invoke(app, ["recover"])
+    assert f"pin {pin.id} (the manifest's) is missing" in r.stdout
+    assert "  1. tether repair" in r.stdout
+
+    repo.repair()
+    assert pin.ref in sys.tags
+    report = repo.recover_report()
+    assert report.objects[0].missing_pin is None
+    assert report.steps == ['tether commit -m "Recover main"']
+
+
+def test_recover_matches_escaped_bookmark_names(
+    vcs_root: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """A bookmark's branch carries its escaped name (`feature/x` ->
+    `feature-x-<digest>`): recover compared that with the VCS's names and
+    suggested a second bookmark on the same branch."""
+    repo = Repo.init(vcs_root)
+    system = _mem(repo)
+    store = default_store()
+    repo.commit("baseline")
+    repo.new(bookmark="feature/x", eager=True)
+    wref = repo.workspace.working_refs["db"]
+    slug = bookmark_slug("feature/x")
+    assert wref.endswith(f".{slug}") and slug != "feature/x"
+    head = store.write(system, wref, {"uncommitted": 1})
+    repo.new("main")
+
+    steps = repo.recover_report().steps
+    assert 'tether new feature/x --adopt && tether commit -m "Recover feature/x"' in (
+        steps
+    )
+    assert not any(f"-b {slug}" in s for s in steps)
+    repo.new("feature/x", adopt=True)
+    assert repo.workspace.working_refs["db"] == wref
+
+    # The name is lost with the repository: taken under the escaped one.
+    fresh = _recovered(repo, tmp_path_factory)
+    (step,) = [s for s in fresh.recover_report().steps if slug in s]
+    assert "the original name cannot be recovered from the branch" in step
+    assert step.endswith(
+        f'\ntether new -b {slug} main --adopt && tether commit -m "Recover {slug}"'
+    )
+    fresh.commit("Recover main")
+    fresh.new("main", bookmark=slug, adopt=True)
+    assert fresh.workspace.working_refs["db"] == wref
+    assert store.system(system).branches[wref] == head
 
 
 # --------------------------------------------------------------------------- #
