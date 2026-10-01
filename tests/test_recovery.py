@@ -1387,6 +1387,57 @@ def test_recover_takes_legacy_branches_back_from_the_trunk(
         assert store.system(systems[space]).branches[ref] == heads[ws, space]
 
 
+@pytest.mark.parametrize("case", ["unrelated", "two unrelated", "lacks the key"])
+def test_recover_never_moves_onto_a_recover_bookmark_it_did_not_make(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    # Legacy, removed at 0.1.0: recovering per-workspace branches
+    """Any existing `recover-<workspace>` was taken for an earlier recovery's,
+    so an unrelated bookmark of that name was moved onto and committed to, or
+    lacked the object and left the recovery half done. One is reused only
+    when everything only it reaches is a `Recover tether.ws.` commit and its
+    head registers the keys; otherwise the next free `-2`, `-3` is made, and
+    the bookmark of that name is left as it was."""
+    monkeypatch.chdir(vcs_root)
+    repo = Repo.init(vcs_root)
+    other = _mem(repo, "other")
+    repo.commit("baseline")
+    taken = ["recover-ab12cd34"] + (
+        ["recover-ab12cd34-2"] if case == "two unrelated" else []
+    )
+    for name in taken:
+        repo.new(bookmark=name, eager=True)
+        if case != "lacks the key":
+            default_store().write(
+                other, repo.workspace.working_refs["other"], {"unrelated": name}
+            )
+            repo.commit(f"unrelated work on {name}")
+        repo.new("main")
+    system = _mem(repo, "db")
+    repo.commit("db")
+    before = repo.vcs.bookmarks()
+    ref = f"tether.ws.{repo.config.dataset_id}.ab12cd34.db-0a1b2c"
+    head = default_store().write(system, ref, {"legacy": 1})
+
+    steps = repo.recover_report().steps
+    (restore,) = [s for s in steps if s.command and " restore " in s.command]
+    fresh = "recover-ab12cd34-3" if case == "two unrelated" else "recover-ab12cd34-2"
+    assert restore.command is not None
+    assert _commands(restore.command) == [
+        ["tether", "new", "-b", fresh, "--", "main"],
+        ["tether", "restore", "--at", ref, "--", "db"],
+        ["tether", "commit", "-m", f"Recover {ref}"],
+    ]
+    assert "recover-ab12cd34 is taken by a bookmark" in restore.note
+
+    _run([restore])
+    repo = Repo.find(vcs_root)
+    marks = repo.vcs.bookmarks()
+    for name in taken:
+        assert marks[name] == before[name]
+    assert repo._objects_at(marks[fresh])["db"].state == {"snapshot_id": head}
+
+
 @pytest.mark.parametrize("key", ["--help", "-x", "-", "two words"])
 def test_recover_ends_options_before_keys_that_start_with_a_dash(
     vcs_root: Path, monkeypatch: pytest.MonkeyPatch, key: str

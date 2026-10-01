@@ -510,7 +510,8 @@ prints the next steps, each a command with its values quoted for the shell
   one. An escaped name no bookmark matches cannot be turned back into the
   original, so it is taken under the escaped one;
 - per *legacy* branch, `tether new -b recover-<workspace> -- TRUNK` (`tether
-  new -- recover-<workspace>` once that exists), `tether restore --at REF --
+  new -- recover-<workspace>` once an earlier recovery made it; `-2`, `-3`
+  when a bookmark of that name is not a recovery's), `tether restore --at REF --
   KEY...` and `tether commit`: a per-workspace branch
   `tether.ws.<id>.<workspace>.<key>` from before bookmarks, listed under its
   workspace id, which may hold writes nobody committed. `restore` refuses

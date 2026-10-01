@@ -73,6 +73,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `tether recover`'s commands end their options with `--`, so a key such as
   `--help` or `-x`, or a git branch name starting with `-`, is not read as
   an option.
+- `tether recover` joins an existing `recover-<workspace>` bookmark only when
+  it is an earlier recovery's (nothing but its commits, and the objects
+  registered); an unrelated bookmark of that name is left alone and the steps
+  use `recover-<workspace>-2`.
 - git: a branch whose name starts with `-` (`git update-ref` makes one) is
   read as a name by every git call tether makes, so `tether new -- -feat`
   switches to it instead of failing to resolve it.

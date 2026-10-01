@@ -178,6 +178,9 @@ reset a branch in place. A new dataset under the old id takes them back:
    committed. `new --adopt` does not take them, and `restore` refuses the
    trunk, so each step first moves to a bookmark `recover-<workspace>`,
    made off the trunk by the workspace's first step and joined by the rest.
+   An existing bookmark of that name is joined only if it holds nothing but
+   an earlier recovery's commits and registers the objects; otherwise the
+   steps make `recover-<workspace>-2` and leave it alone.
    Then `tether
    restore --at REF -- KEY` copies the branch onto the bookmark's branch,
    and `tether commit` pins it before the next step's `new`, which would

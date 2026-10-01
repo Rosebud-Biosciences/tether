@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import itertools
 import re
 import shlex
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from tether.backends.base import Capability
+from tether.errors import TetherError
 from tether.manifest import (
+    WORKING_REF_PREFIX,
     bookmark_slug,
     owner_from_ref,
     pin_dataset,
@@ -32,6 +35,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 _ESCAPED = re.compile(r"-[0-9a-f]{6}$")
 """The digest `bookmark_slug` appends to a name it had to escape."""
+
+_RECOVER_COMMIT = "Recover "
+"""How the commits `recover`'s steps make begin; a legacy restore's goes on
+with the branch it restored, which is how an earlier one is told apart."""
 
 
 class RecoverOps(RepoCore):
@@ -382,11 +389,11 @@ class RecoverOps(RepoCore):
         """A `restore --at` per legacy branch, naming the objects of its native
         branch space (one `(kind, branch_scope)`) together: `restore` refuses
         some of them alone, the branch being theirs as one. Each goes onto a
-        bookmark `recover-<workspace>`, made off the trunk by the first step
-        of its workspace unless `bookmarks` (the VCS's, and those the steps
-        before make) has it, and joined by the rest: `restore` refuses the
-        trunk. Each commits what it restored, since a `new` back onto the
-        bookmark resets a branch whose restore is not committed."""
+        bookmark `recover-<workspace>` (see `_recovery_bookmark`), made off
+        the trunk by the first step of its workspace and joined by the rest:
+        `restore` refuses the trunk. Each commits what it restored, since a
+        `new` back onto the bookmark resets a branch whose restore is not
+        committed."""
         q = shlex.quote
         groups: dict[tuple[str, str, str], list[str]] = {}
         workspace_of: dict[str, str] = {}
@@ -400,16 +407,25 @@ class RecoverOps(RepoCore):
                 for ref in branches:
                     groups.setdefault((m.kind, scope, ref), []).append(o.key)
                     workspace_of[ref] = ws
-        made = set(bookmarks)
+        restored: dict[str, set[str]] = {}
+        for (_kind, _scope, ref), keys in groups.items():
+            restored.setdefault(workspace_of[ref], set()).update(keys)
+        marks = self.vcs.bookmarks()
+        others = set(bookmarks) - set(marks)
+        chosen = {
+            ws: self._recovery_bookmark(ws, keys, marks, others)
+            for ws, keys in sorted(restored.items())
+        }
+        made: set[str] = set()
         steps: list[RecoverStep] = []
         for (_kind, _scope, ref), keys in sorted(
             groups.items(), key=lambda item: (item[1], item[0][2])
         ):
             ws = workspace_of[ref]
-            bookmark = f"recover-{ws}"
+            bookmark = chosen[ws]
             start = (
                 f"tether new -- {q(bookmark)}"
-                if bookmark in made
+                if bookmark in made or bookmark in marks
                 else f"tether new -b {q(bookmark)} -- {q(report.trunk)}"
             )
             made.add(bookmark)
@@ -419,14 +435,54 @@ class RecoverOps(RepoCore):
                 if len(keys) > 1
                 else ""
             )
+            taken = (
+                f"; recover-{ws} is taken by a bookmark that is not an earlier "
+                "recovery's, so it is left as it is"
+                if bookmark != f"recover-{ws}"
+                else ""
+            )
             steps.append(
                 RecoverStep(
                     f"{start} && tether restore --at {q(ref)} -- "
                     + " ".join(q(k) for k in keys)
-                    + f" && tether commit -m {q(f'Recover {ref}')}",
+                    + f" && tether commit -m {q(_RECOVER_COMMIT + ref)}",
                     f"{ref} is a legacy branch of workspace {ws} (named before "
                     "bookmarks) and may hold writes no commit pins: this copies it "
-                    f"onto bookmark {bookmark} and pins it{together}",
+                    f"onto bookmark {bookmark} and pins it{together}{taken}",
                 )
             )
         return steps
+
+    # Legacy, removed at 0.1.0: the bookmark legacy restores go onto
+    def _recovery_bookmark(
+        self,
+        ws: str,
+        keys: set[str],
+        marks: Mapping[str, str],
+        others: set[str],
+    ) -> str:
+        """The bookmark workspace `ws`'s legacy restores go onto:
+        `recover-<ws>`, then `-2`, `-3`, ... An existing one is joined only
+        when it is an earlier recovery's -- everything only it reaches is a
+        legacy-restore commit, and its head registers every key restored onto
+        it -- so a bookmark of that name that is not is never moved onto or
+        committed to. `others` are names the steps before create."""
+        for n in itertools.count(1):
+            name = f"recover-{ws}" if n == 1 else f"recover-{ws}-{n}"
+            if name in others:
+                continue
+            if name not in marks or self._earlier_recovery(name, marks[name], keys):
+                return name
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    def _earlier_recovery(self, name: str, head: str, keys: set[str]) -> bool:
+        try:
+            only = self.vcs.exclusive_commits(name)
+            infos = self.vcs.commit_info(only) if only else []
+            registered = self._objects_at(head)
+        except TetherError:
+            return False
+        return keys <= set(registered) and all(
+            info.message.startswith(_RECOVER_COMMIT + WORKING_REF_PREFIX)
+            for info in infos
+        )
