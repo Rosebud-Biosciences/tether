@@ -109,11 +109,15 @@ reset a branch in place. A new dataset under the old id takes them back:
 2. **`tether recover`** lists tether's refs in each object's store by the
    dataset id they carry: the pin count, and each bookmark with a working
    branch (and its generation, when there are several). It marks the id
-   `tether.toml` names, prints what to run next, and writes nothing. If a
-   store can't be listed, it names that object, suggests nothing, and exits
-   1: fix access, or leave the object out with `tether recover KEY...`. A
-   run scoped to some keys suggests no dataset id: the id applies to every
-   object, so choose it from a run without keys.
+   `tether.toml` names, prints what to run next, and writes nothing. Each
+   step is a command, its values quoted for the shell, followed by a `#`
+   note; a step with nothing to run is a note alone. If a store can't be
+   listed, it names that object, suggests nothing, and exits 1: fix access,
+   or leave the object out with `tether recover KEY...`. A run scoped to
+   some keys suggests no dataset id and no `commit`: a commit pins every
+   object under the current id, which then can no longer change, so an id
+   only a store left out holds would be lost. Its last step is `tether
+   recover` without keys.
 
    ```
    $ tether recover
@@ -121,9 +125,12 @@ reset a branch in place. A new dataset under the old id takes them back:
      imaging  [icechunk]
        0a1b2c3d (this dataset): 5 pin(s); bookmarks: relabel, sweep
    next steps:
-     1. tether commit -m "Recover main"
-     2. tether new -b relabel main --adopt && tether commit -m "Recover relabel"
-     3. tether new -b sweep main --adopt && tether commit -m "Recover sweep"
+     1. tether commit -m 'Recover main'
+        # pins each object's upstream branch on the trunk (main); a state pinned before reuses its tag
+     2. tether new -b relabel main --adopt && tether commit -m 'Recover relabel'
+        # bookmark relabel, made afresh off the trunk: takes its branches as they are, uncommitted writes included, and pins them
+     3. tether new -b sweep main --adopt && tether commit -m 'Recover sweep'
+        # bookmark sweep, made afresh off the trunk: takes its branches as they are, uncommitted writes included, and pins them
    ```
 
    If a manifest already names a pin its store lacks (a tag deleted by
@@ -131,12 +138,13 @@ reset a branch in place. A new dataset under the old id takes them back:
    `commit` does not recreate a pin whose state is unchanged.
 
 3. **Set the id, if it is not the old one.** When the refs carry another id
-   and nothing is pinned under this dataset's yet, `recover` prints what to
-   put in `tether.toml`:
+   and nothing is pinned under this dataset's yet, `recover`'s first step is
+   a note with what to put in `tether.toml`:
 
-   ```toml
-   [dataset]
-   id = "0a1b2c3d"
+   ```
+     1. # set this dataset's id in tether.toml (nothing is pinned under 12345678 yet):
+        # [dataset]
+        # id = "0a1b2c3d"
    ```
 
    The id can change only while nothing is pinned under it
@@ -166,7 +174,9 @@ reset a branch in place. A new dataset under the old id takes them back:
    `<workspace>`, since one may hold the only copy of writes nobody
    committed. `new --adopt` does not take them. On a bookmark, `tether
    restore KEY --at REF` copies one onto the bookmark's branch, and `tether
-   commit` pins it.
+   commit` pins it. Objects that share a branch space, such as two Neon
+   databases on one branch, are restored together: `recover` names them in
+   one `tether restore KEY1 KEY2 --at REF`.
    <!-- Legacy, removed at 0.1.0: recover's legacy-branch step (renumber the list) -->
 
 The VCS history is lost for good: the commit messages, and which states

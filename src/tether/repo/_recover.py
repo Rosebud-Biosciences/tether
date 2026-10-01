@@ -20,7 +20,12 @@ from tether.manifest import (
     working_ref_workspace,
 )
 from tether.repo._core import RepoCore
-from tether.repo._reports import RecoveredObject, RecoveredRefs, RecoverReport
+from tether.repo._reports import (
+    RecoveredObject,
+    RecoveredRefs,
+    RecoverReport,
+    RecoverStep,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from tether.repo import Repo
@@ -43,19 +48,22 @@ class RecoverOps(RepoCore):
         `tether.ws.<dataset>.<workspace>.<key>` (`legacy`). The report counts
         the pins and names the bookmarks under every dataset id it finds,
         this one's and any other's, from the same listings `gc` reads.
-        `steps` are the commands that take them back: `repair` first where a
-        manifest names a pin its store lacks; the id to set in `tether.toml`
-        when the refs are another dataset's and nothing is pinned under this
-        one yet; a `commit` on the trunk, which re-pins each upstream branch
-        (a state pinned before reuses its tag); then per bookmark `new
-        BOOKMARK --adopt` (`new -b BOOKMARK TRUNK --adopt` where the VCS has
-        no such bookmark) and a `commit`; and per legacy branch a `restore
-        --at` that copies it.
+        `steps` (each a quoted command, or none, and a note) take them back:
+        `repair` first where a manifest names a pin its store lacks; the id
+        to set in `tether.toml` when the refs are another dataset's and
+        nothing is pinned under this one yet; a `commit` on the trunk, which
+        re-pins each upstream branch (a state pinned before reuses its tag);
+        then per bookmark `new BOOKMARK --adopt` (`new -b BOOKMARK TRUNK
+        --adopt` where the VCS has no such bookmark) and a `commit`; and per
+        legacy branch a `restore --at` that copies it, naming every object
+        of a branch space together.
 
         Args:
             keys: Only these objects (keys, or prefixes ending in `/`; see
                 `select_keys`); default: every object. The dataset id
-                applies to every object, so a report on some advises none.
+                applies to every object, and a commit pins every object
+                under it: a report on some advises no id and nothing that
+                pins, and ends with `tether recover` on every object.
 
         Raises:
             ConfigError: A selector matches no object.
@@ -130,152 +138,272 @@ class RecoverOps(RepoCore):
         report.steps = self._recover_steps(report)
         return report
 
-    def _recover_steps(self, report: RecoverReport) -> list[str]:
+    def _recover_steps(self, report: RecoverReport) -> list[RecoverStep]:
         """What to run, in order, to take back what `report` found; sets
         `report.suggested_id`. Nothing is suggested while a selected store
         could not be listed: its refs may name another id or more
-        bookmarks, and "nothing found" would steer to a fresh commit."""
+        bookmarks, and "nothing found" would steer to a fresh commit. A
+        scoped report suggests nothing that pins: a commit pins every
+        object under the current id, which then can no longer change, and
+        an id found only in a store left out would be lost."""
         failed = [o.key for o in report.objects if o.error is not None]
         if failed:
             return [
-                f"could not list the refs of {', '.join(failed)}: fix access to "
-                "their stores and run `tether recover` again, or leave them out "
-                "(`tether recover KEY...`); nothing is suggested from a partial "
-                "listing"
+                RecoverStep(
+                    None,
+                    f"could not list the refs of {', '.join(failed)}: fix access "
+                    "to their stores and run `tether recover` again, or leave them "
+                    "out (`tether recover KEY...`); nothing is suggested from a "
+                    "partial listing",
+                )
             ]
-        steps: list[str] = []
+        steps: list[RecoverStep] = []
         missing = [o.key for o in report.objects if o.missing_pin is not None]
         if missing:
             steps.append(
-                f"tether repair  (the manifests of {', '.join(missing)} name pins "
-                "their stores lack; repair recreates them from the recorded "
-                "states -- a `tether commit` does not, the states being unchanged)"
+                RecoverStep(
+                    "tether repair",
+                    f"the manifests of {', '.join(missing)} name pins their stores "
+                    "lack; repair recreates them from the recorded states -- a "
+                    "`tether commit` does not, the states being unchanged",
+                )
             )
-        steps.extend(self._take_back_steps(report))
+        if report.scoped:
+            steps.extend(self._scoped_steps(report))
+        else:
+            steps.extend(self._take_back_steps(report))
         unrecognized = sorted({r for o in report.objects for r in o.unrecognized})
         if unrecognized:
             steps.append(
-                f"{', '.join(unrecognized)} look like tether's but carry no "
-                "dataset id it can read, so nothing above takes them back: "
-                "look at them before pinning afresh; on a bookmark, `tether "
-                "restore KEY --at REF` copies a branch"
+                RecoverStep(
+                    None,
+                    f"{', '.join(unrecognized)} look like tether's but carry no "
+                    "dataset id it can read, so no step here takes them back: look "
+                    "at them before pinning afresh; on a bookmark, `tether restore "
+                    "KEY --at REF` copies a branch",
+                )
+            )
+        if report.scoped:
+            steps.append(
+                RecoverStep(
+                    "tether recover",
+                    "the dataset id applies to every object, and a commit pins "
+                    "every object under it, after which the id can no longer "
+                    "change: the steps that take these refs back come from "
+                    "listing every store",
+                )
             )
         return steps
 
-    def _take_back_steps(self, report: RecoverReport) -> list[str]:
-        """The id, trunk, bookmark and legacy-branch steps of
+    def _scoped_steps(self, report: RecoverReport) -> list[RecoverStep]:
+        """What a scoped report says of the dataset ids it found: notes
+        only, no id and nothing that pins (see `_recover_steps`)."""
+        found = report.datasets
+        current = report.dataset_id
+        if not found:
+            if any(o.unrecognized or o.missing_pin for o in report.objects):
+                return []
+            return [RecoverStep(None, "no tether refs in the selected stores")]
+        others = sorted(ds for ds in found if ds != current)
+        if not others:
+            return []
+        if report.pinned:
+            then = (
+                f"this dataset has pinned under {current} already, so its id can "
+                "no longer change; if they were this one's, take them back in a "
+                "fresh repository: `tether init --dataset-id ID`, `tether add` the "
+                "objects, then `tether recover` there"
+            )
+        else:
+            then = f"nothing is pinned under {current} yet, so the id can still change"
+        return [
+            RecoverStep(
+                None,
+                f"the refs of {', '.join(others)} are "
+                + ("another dataset's" if len(others) == 1 else "other datasets'")
+                + f", not {current}'s; {then}",
+            )
+        ]
+
+    def _take_back_steps(self, report: RecoverReport) -> list[RecoverStep]:
+        """The id, trunk, bookmark and legacy-branch steps of an unscoped
         `_recover_steps`."""
+        q = shlex.quote
         found = report.datasets
         current, trunk = report.dataset_id, report.trunk
+        recommit = (
+            "" if self.workspace.bookmark == trunk else f"tether new {q(trunk)} && "
+        ) + f"tether commit -m {q(f'Recover {trunk}')}"
         if not found:
             if any(o.unrecognized or o.missing_pin for o in report.objects):
                 return []
             return [
-                "no tether refs in these stores: nothing to take back; a "
-                f"`tether commit` on the trunk ({trunk}) pins the objects afresh"
+                RecoverStep(
+                    recommit,
+                    "no tether refs in these stores: nothing to take back; a "
+                    f"commit on the trunk ({trunk}) pins the objects afresh",
+                )
             ]
         others = sorted(ds for ds in found if ds != current)
-        whole = (
-            "the id applies to every object: run `tether recover` without keys "
-            "before choosing it"
-        )
-        named = others[0] if len(others) == 1 and not report.scoped else "ID"
+        named = others[0] if len(others) == 1 else "ID"
         elsewhere = (
             f"this dataset has pinned under {current} already, so its id can no "
             "longer change; take them back in a fresh repository: `tether init "
-            f"--dataset-id {named}`, `tether add` the objects, then `tether "
-            "recover` there" + (f" ({whole})" if report.scoped else "")
+            f"--dataset-id {q(named)}`, `tether add` the objects, then `tether "
+            "recover` there"
         )
-        steps: list[str] = []
+        steps: list[RecoverStep] = []
         target: str | None = current if current in found else None
         if target is None and report.pinned:
-            return [f"the refs are {', '.join(others)}'s, and {elsewhere}"]
-        if target is None and report.scoped:
             return [
-                f"the refs are {', '.join(others)}'s, not {current}'s (nothing "
-                f"is pinned under {current} yet, so the id can still change); "
-                f"{whole}"
+                RecoverStep(
+                    None, f"the refs are {', '.join(others)}'s, and {elsewhere}"
+                )
             ]
         if target is None and len(others) == 1:
             target = report.suggested_id = others[0]
             steps.append(
-                f"set this dataset's id in tether.toml (nothing is pinned under "
-                f'{current} yet):\n[dataset]\nid = "{target}"'
+                RecoverStep(
+                    None,
+                    "set this dataset's id in tether.toml (nothing is pinned "
+                    f'under {current} yet):\n[dataset]\nid = "{target}"',
+                )
             )
         elif target is None:
             steps.append(
-                f"the stores hold refs of {len(others)} datasets; set the id "
-                f"that was this one's in tether.toml (nothing is pinned under "
-                f"{current} yet), one of these under [dataset]:\n"
-                + "\n".join(f'id = "{ds}"' for ds in others)
+                RecoverStep(
+                    None,
+                    f"the stores hold refs of {len(others)} datasets; set the id "
+                    f"that was this one's in tether.toml (nothing is pinned under "
+                    f"{current} yet), one of these under [dataset]:\n"
+                    + "\n".join(f'id = "{ds}"' for ds in others),
+                )
             )
         steps.append(
-            ("" if self.workspace.bookmark == trunk else f"tether new {trunk} && ")
-            + f'tether commit -m "Recover {trunk}"'
+            RecoverStep(
+                recommit,
+                f"pins each object's upstream branch on the trunk ({trunk}); a "
+                "state pinned before reuses its tag",
+            )
         )
         if target is None:
             steps.append(
-                "then, per bookmark of that id: `tether new -b BOOKMARK "
-                f"{trunk} --adopt` and `tether commit`"
+                RecoverStep(
+                    "tether recover",
+                    "with the id set, the steps that take back its bookmarks: "
+                    f"`tether new -b BOOKMARK {q(trunk)} --adopt`, then `tether "
+                    "commit`, for each",
+                )
             )
             return steps
         by_slug: dict[str, list[str]] = {}
         for name in self.vcs.bookmarks():
             by_slug.setdefault(bookmark_slug(name), []).append(name)
+        adopts = (
+            "takes its branches as they are, uncommitted writes included, and pins them"
+        )
         for slug, branches in sorted(found[target].bookmarks.items()):
+            branch = branches[-1]
             if slug == bookmark_slug(trunk):
                 steps.append(
-                    f"{branches[-1]} is named for the trunk, whose working refs "
-                    "are the upstream branches: on a bookmark, `tether restore "
-                    f"KEY --at {branches[-1]}` copies it"
+                    RecoverStep(
+                        None,
+                        f"{branch} is named for the trunk, whose working refs are "
+                        "the upstream branches: on a bookmark, `tether restore KEY "
+                        f"--at {q(branch)}` copies it",
+                    )
                 )
                 continue
             names = sorted(by_slug.get(slug, []))
             if len(names) == 1:
                 steps.append(
-                    f"tether new {shlex.quote(names[0])} --adopt && tether commit "
-                    f'-m "Recover {names[0]}"'
+                    RecoverStep(
+                        f"tether new {q(names[0])} --adopt && tether commit -m "
+                        + q(f"Recover {names[0]}"),
+                        f"bookmark {names[0]}: {adopts}",
+                    )
                 )
-            elif names:
+                continue
+            if names:
                 steps.append(
-                    f"{branches[-1]} is the branch of whichever of the bookmarks "
-                    f"{', '.join(names)} it was (their names escape alike): "
-                    "`tether new NAME --adopt` with that one, then `tether commit`"
+                    RecoverStep(
+                        None,
+                        f"{branch} is the branch of whichever of the bookmarks "
+                        f"{', '.join(names)} it was (their names escape alike): "
+                        "`tether new NAME --adopt` with that one, then `tether "
+                        "commit`",
+                    )
                 )
-            elif _ESCAPED.search(slug):
-                steps.append(
-                    f"{branches[-1]} names bookmark {slug}, which looks escaped "
-                    "(a name with `/`, `.` or spaces gets a digest of the "
-                    "original appended); the original name cannot be recovered "
-                    f"from the branch, and this takes it under {slug}:\n"
-                    f"tether new -b {slug} {trunk} --adopt && tether commit -m "
-                    f'"Recover {slug}"'
+                continue
+            if _ESCAPED.search(slug):
+                note = (
+                    f"{branch} names bookmark {slug}, which looks escaped (a name "
+                    "with `/`, `.` or spaces gets a digest of the original "
+                    "appended); the original name cannot be recovered from the "
+                    f"branch, and this takes it under {slug}: it {adopts}"
                 )
             else:
-                steps.append(
-                    f"tether new -b {slug} {trunk} --adopt && tether commit -m "
-                    f'"Recover {slug}"'
+                note = f"bookmark {slug}, made afresh off the trunk: {adopts}"
+            steps.append(
+                RecoverStep(
+                    f"tether new -b {q(slug)} {q(trunk)} --adopt && tether commit "
+                    f"-m {q(f'Recover {slug}')}",
+                    note,
                 )
-        # Legacy, removed at 0.1.0: the `restore --at` step per legacy branch
-        for o in report.objects:
-            legacy = o.namespaces[target].legacy if target in o.namespaces else {}
-            for ws, branches in sorted(legacy.items()):
-                steps.extend(
-                    f"{ref} is a legacy branch of workspace {ws} (named before "
-                    "bookmarks) and may hold writes no commit pins: on a "
-                    f"bookmark, `tether restore {o.key} --at {ref}` copies it"
-                    for ref in branches
-                )
+            )
+        # Legacy, removed at 0.1.0: the `restore --at` steps for legacy branches
+        steps.extend(self._legacy_restore_steps(report, target))
         if others and target == current:
             if report.pinned:
                 then = elsewhere
-            elif report.scoped:
-                then = whole
             else:
                 then = "set its id in tether.toml before anything is pinned"
             steps.append(
-                f"the refs of {', '.join(others)} are "
-                + ("another dataset's" if len(others) == 1 else "other datasets'")
-                + f" and are left as they are; if they were this one's, {then}"
+                RecoverStep(
+                    None,
+                    f"the refs of {', '.join(others)} are "
+                    + ("another dataset's" if len(others) == 1 else "other datasets'")
+                    + f" and are left as they are; if they were this one's, {then}",
+                )
+            )
+        return steps
+
+    # Legacy, removed at 0.1.0: the `restore --at` steps for legacy branches
+    def _legacy_restore_steps(
+        self, report: RecoverReport, target: str
+    ) -> list[RecoverStep]:
+        """A `restore --at` per legacy branch, naming the objects of its native
+        branch space (one `(kind, branch_scope)`) together: `restore` refuses
+        some of them alone, the branch being theirs as one."""
+        q = shlex.quote
+        groups: dict[tuple[str, str, str], list[str]] = {}
+        workspace_of: dict[str, str] = {}
+        for o in report.objects:
+            legacy = o.namespaces[target].legacy if target in o.namespaces else {}
+            if not legacy:
+                continue
+            m = self.objects[o.key]
+            scope = self.backend_for(m.kind).branch_scope(m.locator)
+            for ws, branches in legacy.items():
+                for ref in branches:
+                    groups.setdefault((m.kind, scope, ref), []).append(o.key)
+                    workspace_of[ref] = ws
+        steps: list[RecoverStep] = []
+        for (_kind, _scope, ref), keys in sorted(
+            groups.items(), key=lambda item: (item[1], item[0][2])
+        ):
+            together = (
+                f"; {', '.join(keys)} share its branch space, so they are "
+                "restored together"
+                if len(keys) > 1
+                else ""
+            )
+            steps.append(
+                RecoverStep(
+                    f"tether restore {' '.join(q(k) for k in keys)} --at {q(ref)}",
+                    f"{ref} is a legacy branch of workspace {workspace_of[ref]} "
+                    "(named before bookmarks) and may hold writes no commit pins: "
+                    f"on a bookmark, this copies it{together}",
+                )
             )
         return steps

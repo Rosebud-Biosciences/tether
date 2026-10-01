@@ -1344,13 +1344,15 @@ def recover(
     Read-only. Lists tether's refs in each registered object's store -- pins
     `tether.<dataset>.<hash>` and working branches
     `tether.ws.<dataset>.<bookmark>` -- by the dataset id they carry, marks
-    the one tether.toml names, and prints the steps: `repair` where a
+    the one tether.toml names, and prints the steps, each a command (values
+    quoted for the shell) or none, and a `#` note: `repair` where a
     manifest names a pin its store lacks, the id to set while nothing is
     pinned under this one, a `commit` on the trunk, then `new BOOKMARK
     --adopt` (`-b BOOKMARK TRUNK` where the VCS has no such bookmark) and a
     `commit` per bookmark, and a `restore --at` per legacy per-workspace
-    branch. With KEYs no dataset id is suggested: it applies to every
-    object. Exit 1 if a store could not be listed.
+    branch. With KEYs no dataset id and nothing that pins is suggested: a
+    commit pins every object under the id; the steps end with `tether
+    recover` on every object. Exit 1 if a store could not be listed.
     """
     repo = _repo()
     try:
@@ -1398,10 +1400,11 @@ def recover(
             typer.echo(f"    no dataset id: {', '.join(o.unrecognized)}")
     typer.echo("next steps:")
     for n, step in enumerate(report.steps, 1):
-        first, *rest = step.split("\n")
-        typer.echo(f"  {n}. {first}")
-        for line in rest:
-            typer.echo(f"       {line}")
+        lines = [step.command] if step.command is not None else []
+        lines += [f"# {line}" for line in step.note.split("\n")]
+        typer.echo(f"  {n}. {lines[0]}")
+        for line in lines[1:]:
+            typer.echo(f"     {line}")
     if failed:
         raise typer.Exit(1)
 

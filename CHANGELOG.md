@@ -24,6 +24,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A saved plan (`--plan FILE`) records the tether version that made it, and
   `--from-plan` applies it only under that version. Plans saved by any other
   version, including every earlier release, are refused: re-run the plan.
+- `tether recover` prints each step as a command followed by a `#` note, and
+  `--json` gives each as `{"command": str or null, "note": str}` instead of
+  one string mixing the two.
 
 ### Fixed
 
@@ -49,6 +52,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   suggests no dataset id when run on some keys only, and puts `tether repair`
   first when a manifest's pin is missing from its store. It also matches
   escaped bookmark names (`feature/x`) to the VCS's bookmarks.
+- `tether recover KEY...` no longer suggests a `tether commit`, which pins
+  every object under the current id and could lock in the wrong one; its
+  last step is `tether recover` without keys.
+- `tether recover`'s commands quote every key, ref, bookmark and message for
+  the shell, and its advice for a legacy branch that objects share (two Neon
+  databases on one branch) names them in one `tether restore`, which
+  `restore` requires.
 
 ## [0.1.0b5] - 2026-09-25
 

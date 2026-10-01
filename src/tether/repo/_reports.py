@@ -445,6 +445,22 @@ class RecoveredObject:
         }
 
 
+@dataclass(frozen=True)
+class RecoverStep:
+    """One step of a `RecoverReport`: a command to run, or none, and a note."""
+
+    command: str | None
+    """A shell command line, every value in it quoted (`shlex.quote`); `&&`
+    joins two that go together. `None` where the step is something to look
+    at, decide or edit by hand."""
+    note: str
+    """What the command does, or what to do where there is none; may span
+    lines (a `tether.toml` snippet)."""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"command": self.command, "note": self.note}
+
+
 @dataclass
 class RecoverReport:
     """What `Repo.recover_report` found: tether's refs in each object's store,
@@ -465,9 +481,11 @@ class RecoverReport:
     `scoped` report."""
     scoped: bool = False
     """Whether only some objects were listed (`recover KEY...`): the id
-    applies to every object, so a scoped report advises none."""
-    steps: list[str] = field(default_factory=list)
-    """The commands to run, in order."""
+    applies to every object, and a commit pins every object under it, so a
+    scoped report advises no id and nothing that pins; its steps end with
+    `tether recover` on every object."""
+    steps: list[RecoverStep] = field(default_factory=list)
+    """What to run, in order."""
 
     @property
     def datasets(self) -> dict[str, RecoveredRefs]:
@@ -488,7 +506,7 @@ class RecoverReport:
             "scoped": self.scoped,
             "objects": [o.to_dict(self.dataset_id) for o in self.objects],
             "datasets": [found[ds].to_dict(self.dataset_id) for ds in sorted(found)],
-            "steps": list(self.steps),
+            "steps": [step.to_dict() for step in self.steps],
         }
 
 

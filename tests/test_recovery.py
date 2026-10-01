@@ -787,13 +787,16 @@ def test_recover_groups_refs_by_dataset_and_says_what_to_run(
         "exp": [f"tether.ws.{old}.exp", f"tether.ws.{old}.exp.2"],
     }
     assert not report.pinned and report.suggested_id == old
-    assert report.steps == [
-        "set this dataset's id in tether.toml (nothing is pinned under "
-        f'12345678 yet):\n[dataset]\nid = "{old}"',
-        'tether commit -m "Recover main"',
-        'tether new -b exp main --adopt && tether commit -m "Recover exp"',
-        'tether new -b feat main --adopt && tether commit -m "Recover feat"',
+    assert [s.command for s in report.steps] == [
+        None,
+        "tether commit -m 'Recover main'",
+        "tether new -b exp main --adopt && tether commit -m 'Recover exp'",
+        "tether new -b feat main --adopt && tether commit -m 'Recover feat'",
     ]
+    assert report.steps[0].note == (
+        "set this dataset's id in tether.toml (nothing is pinned under "
+        f'12345678 yet):\n[dataset]\nid = "{old}"'
+    )
     assert repo.recover_report(["raw"]).objects == [raw_row]
     with pytest.raises(ConfigError, match="no such object"):
         repo.recover_report(["nope"])
@@ -807,14 +810,15 @@ def test_recover_groups_refs_by_dataset_and_says_what_to_run(
     assert set(report.datasets) == {old, other}
     assert report.datasets[other].bookmarks == {"side": [f"tether.ws.{other}.side"]}
     assert report.suggested_id is None
-    assert f'under [dataset]:\nid = "{min(old, other)}"' in report.steps[0]
-    assert f'\nid = "{max(old, other)}"' in report.steps[0]
-    assert "per bookmark of that id" in report.steps[-1]
+    assert f'under [dataset]:\nid = "{min(old, other)}"' in report.steps[0].note
+    assert f'\nid = "{max(old, other)}"' in report.steps[0].note
+    assert report.steps[-1].command == "tether recover"
+    assert "with the id set" in report.steps[-1].note
 
     # Under the old id, it is this dataset's: no id to set.
     again = _recovered(lost, tmp_path_factory)
-    report = again.recover_report(["db"])
-    assert report.steps[0] == 'tether commit -m "Recover main"'
+    report = again.recover_report()
+    assert report.steps[0].command == "tether commit -m 'Recover main'"
     assert report.to_dict()["datasets"][0] == {
         "dataset_id": old,
         "current": True,
@@ -839,12 +843,14 @@ def test_recover_groups_refs_by_dataset_and_says_what_to_run(
 
     # Once this dataset has pinned under its own id, the id stays.
     repo.commit("pinned under the new id")
-    report = repo.recover_report(["db"])
-    assert report.pinned and report.suggested_id is None
-    assert not any("[dataset]" in step for step in report.steps)
-    last = report.steps[-1]
-    assert f"{', '.join(sorted([old, other]))} are other datasets'" in last
-    assert "can no longer change" in last and "tether init --dataset-id ID" in last
+    for keys in (["db"], None):
+        report = repo.recover_report(keys)
+        assert report.pinned and report.suggested_id is None
+        assert not any("[dataset]" in step.note for step in report.steps)
+        note = report.steps[-2 if keys else -1].note
+        assert f"{', '.join(sorted([old, other]))} are other datasets'" in note
+        assert "can no longer change" in note and "--dataset-id ID`" in note
+    assert report.steps[0].command == "tether commit -m 'Recover main'"
 
 
 def test_cli_recover(
@@ -863,7 +869,8 @@ def test_cli_recover(
     assert "dataset id 12345678 (tether.toml)" in r.stdout
     assert f"{old}: 2 pin(s); bookmarks: feat" in r.stdout
     assert "(this dataset)" not in r.stdout
-    assert f'       id = "{old}"' in r.stdout
+    assert f'     # id = "{old}"' in r.stdout
+    assert "  2. tether commit -m 'Recover main'\n     # pins each" in r.stdout
     assert "tether new -b feat main --adopt" in r.stdout
 
     r = runner.invoke(app, ["recover", "--json"])
@@ -880,6 +887,12 @@ def test_cli_recover(
         "steps",
     }
     assert payload["suggested_dataset_id"] == old and not payload["scoped"]
+    assert payload["steps"][0] == {
+        "command": None,
+        "note": "set this dataset's id in tether.toml (nothing is pinned under "
+        f'12345678 yet):\n[dataset]\nid = "{old}"',
+    }
+    assert all(set(step) == {"command", "note"} for step in payload["steps"])
     rows = {o["key"]: o for o in payload["objects"]}
     assert rows["gone"] == {
         "key": "gone",
@@ -920,8 +933,9 @@ def test_recover_suggests_nothing_while_a_store_cannot_be_listed(
             assert [o.key for o in report.objects if o.error] == ["gone"]
             assert report.suggested_id is None
             (step,) = report.steps
-            assert step.startswith("could not list the refs of gone")
-            assert "no tether refs" not in step and "commit" not in step
+            assert step.command is None
+            assert step.note.startswith("could not list the refs of gone")
+            assert "no tether refs" not in step.note and "commit" not in step.note
     finally:
         default_store().deleted.discard(gone)
     assert repo.recover_report().suggested_id == lost.config.dataset_id
@@ -951,19 +965,26 @@ def test_recover_lists_legacy_and_unreadable_branches(
     assert report.to_dict()["datasets"][0]["legacy"] == [
         {"workspace": "ab12cd34", "branches": [legacy]}
     ]
-    assert report.steps[0] == 'tether commit -m "Recover main"'
-    assert report.steps[1] == (
+    steps = repo.recover_report().steps
+    assert [s.command for s in steps] == [
+        "tether commit -m 'Recover main'",
+        f"tether restore db --at {legacy}",
+        None,
+    ]
+    assert steps[1].note == (
         f"{legacy} is a legacy branch of workspace ab12cd34 (named before "
-        "bookmarks) and may hold writes no commit pins: on a bookmark, "
-        f"`tether restore db --at {legacy}` copies it"
+        "bookmarks) and may hold writes no commit pins: on a bookmark, this "
+        "copies it"
     )
+    assert steps[2].note.startswith("tether.ws.not-a-dataset look like tether's")
     (row,) = repo.recover_report(["odd"]).objects
     assert row.unrecognized == ["tether.ws.not-a-dataset"] and not row.namespaces
-    (step,) = repo.recover_report(["odd"]).steps
-    assert step.startswith("tether.ws.not-a-dataset look like tether's")
+    step, last = repo.recover_report(["odd"]).steps
+    assert step.note.startswith("tether.ws.not-a-dataset look like tether's")
+    assert last.command == "tether recover"
     for keys in (["db"], ["odd"], None):
         steps = repo.recover_report(keys).steps
-        assert not any("no tether refs" in s for s in steps), keys
+        assert not any("no tether refs" in s.note for s in steps), keys
     r = runner.invoke(app, ["recover"])
     assert r.exit_code == 0, r.output
     assert f"legacy branches of workspace ab12cd34: {legacy}" in r.stdout
@@ -992,26 +1013,28 @@ def test_a_scoped_recover_advises_no_dataset_id(
 
     report = repo.recover_report(["db"])
     assert report.scoped and report.suggested_id is None
-    (step,) = report.steps
-    assert f"the refs are {old}'s, not 12345678's" in step
-    assert "run `tether recover` without keys before choosing it" in step
-    assert "[dataset]" not in step and "commit" not in step
+    step, last = report.steps
+    assert step.command is None
+    assert f"the refs of {old} are another dataset's, not 12345678's" in step.note
+    assert "nothing is pinned under 12345678 yet" in step.note
+    assert last.command == "tether recover"
+    assert "[dataset]" not in step.note and "commit -m" not in step.note
     monkeypatch.chdir(repo.root)
     r = runner.invoke(app, ["recover", "db", "--json"])
     assert r.exit_code == 0, r.output
     payload = json.loads(r.stdout)
     assert payload["scoped"] and payload["suggested_dataset_id"] is None
     r = runner.invoke(app, ["recover", "db"])
-    assert "without keys" in r.stdout and 'id = "' not in r.stdout
+    assert "  2. tether recover\n" in r.stdout and 'id = "' not in r.stdout
 
     # Under this dataset's own id, another dataset's refs beside it: the
     # closing advice names no id either.
     other = "fedcba98"
     default_store().system(system).branches[f"tether.ws.{other}.side"] = "x"
     mine = _recovered(lost, tmp_path_factory)
-    assert f"--dataset-id {other}`" in mine.recover_report().steps[-1]
-    last = mine.recover_report(["db"]).steps[-1]
-    assert "--dataset-id ID`" in last and "without keys" in last
+    assert f"--dataset-id {other}`" in mine.recover_report().steps[-1].note
+    *_, note, last = mine.recover_report(["db"]).steps
+    assert "--dataset-id ID`" in note.note and last.command == "tether recover"
 
 
 def test_recover_steers_a_missing_pin_to_repair(
@@ -1032,8 +1055,9 @@ def test_recover_steers_a_missing_pin_to_repair(
     (row,) = report.objects
     assert row.missing_pin == pin.id
     (step,) = report.steps
-    assert step.startswith("tether repair  (the manifests of db name pins")
-    assert "no tether refs" not in step
+    assert step.command == "tether repair"
+    assert step.note.startswith("the manifests of db name pins their stores lack")
+    assert "no tether refs" not in step.note
     r = runner.invoke(app, ["recover", "--json"])
     (row,) = json.loads(r.stdout)["objects"]
     assert row["missing_pin"] == pin.id
@@ -1045,7 +1069,7 @@ def test_recover_steers_a_missing_pin_to_repair(
     assert pin.ref in sys.tags
     report = repo.recover_report()
     assert report.objects[0].missing_pin is None
-    assert report.steps == ['tether commit -m "Recover main"']
+    assert [s.command for s in report.steps] == ["tether commit -m 'Recover main'"]
 
 
 def test_recover_matches_escaped_bookmark_names(
@@ -1065,25 +1089,167 @@ def test_recover_matches_escaped_bookmark_names(
     head = store.write(system, wref, {"uncommitted": 1})
     repo.new("main")
 
-    steps = repo.recover_report().steps
-    assert 'tether new feature/x --adopt && tether commit -m "Recover feature/x"' in (
-        steps
+    commands = [s.command or "" for s in repo.recover_report().steps]
+    assert (
+        "tether new feature/x --adopt && tether commit -m 'Recover feature/x'"
+        in commands
     )
-    assert not any(f"-b {slug}" in s for s in steps)
+    assert not any(f"-b {slug}" in c for c in commands)
     repo.new("feature/x", adopt=True)
     assert repo.workspace.working_refs["db"] == wref
 
     # The name is lost with the repository: taken under the escaped one.
     fresh = _recovered(repo, tmp_path_factory)
-    (step,) = [s for s in fresh.recover_report().steps if slug in s]
-    assert "the original name cannot be recovered from the branch" in step
-    assert step.endswith(
-        f'\ntether new -b {slug} main --adopt && tether commit -m "Recover {slug}"'
+    (step,) = [s for s in fresh.recover_report().steps if slug in s.note]
+    assert "the original name cannot be recovered from the branch" in step.note
+    assert step.command == (
+        f"tether new -b {slug} main --adopt && tether commit -m 'Recover {slug}'"
     )
     fresh.commit("Recover main")
     fresh.new("main", bookmark=slug, adopt=True)
     assert fresh.workspace.working_refs["db"] == wref
     assert store.system(system).branches[wref] == head
+
+
+LOST_ID = "0a1b2c3d"
+
+
+@pytest.mark.parametrize(
+    "selected_holds",
+    ["nothing", "this id's branch", "this id's pin", "the lost id's refs", "both"],
+)
+def test_a_scoped_recover_suggests_nothing_that_pins(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch, selected_holds: str
+) -> None:
+    """A commit pins every object under the current id, after which it can no
+    longer change; a scoped run suggested one when the selected stores held
+    no refs ("pins the objects afresh") or only this id's, losing an id
+    found only in a store left out. Whatever the selected stores hold, a
+    scoped run suggests no commit and nothing else that moves or pins, and
+    ends with `tether recover` on every object -- which, here, finds the
+    lost id."""
+    monkeypatch.chdir(vcs_root)
+    repo = Repo.init(vcs_root)
+    ds = repo.config.dataset_id
+    picked, left_out = _mem(repo, "picked"), _mem(repo, "left-out")
+    store = default_store()
+    base = store.write(picked, "main", {"v": 1})
+    store.write(left_out, "main", {"v": 1})
+    store.system(left_out).tags[f"tether.{LOST_ID}.00000000000000aa"] = base
+    store.write(left_out, f"tether.ws.{LOST_ID}.feat", {"v": 2})
+    sys = store.system(picked)
+    if selected_holds in ("this id's branch", "both"):
+        sys.branches[f"tether.ws.{ds}.feat"] = base
+    if selected_holds == "this id's pin":
+        sys.tags[f"tether.{ds}.00000000000000bb"] = base
+    if selected_holds in ("the lost id's refs", "both"):
+        sys.branches[f"tether.ws.{LOST_ID}.feat"] = base
+
+    report = repo.recover_report(["picked"])
+    assert report.scoped and report.suggested_id is None
+    *notes, last = report.steps
+    assert last.command == "tether recover"
+    assert [s.command for s in notes] == [None] * len(notes)
+    assert not any("[dataset]" in s.note for s in report.steps)
+    r = runner.invoke(app, ["recover", "picked"])
+    assert r.exit_code == 0, r.output
+    assert "commit -m" not in r.stdout and "--adopt" not in r.stdout
+    assert f"  {len(report.steps)}. tether recover\n" in r.stdout
+
+    whole = repo.recover_report()
+    if selected_holds == "this id's pin":
+        assert whole.pinned and LOST_ID in whole.steps[-1].note
+    elif selected_holds in ("this id's branch", "both"):
+        assert "if they were this one's, set its id" in whole.steps[-1].note
+    else:
+        assert whole.suggested_id == LOST_ID
+
+
+HOSTILE_KEYS = [
+    "two words",
+    "cost$HOME",
+    "a;touch pwned",
+    "it's",
+    'say "hi"',
+    "all `of` $(it); 'at' once",
+]
+
+
+@pytest.mark.parametrize("key", HOSTILE_KEYS)
+def test_recover_quotes_its_commands_and_restores_a_branch_space_together(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    """Commands were interpolated raw, so a key with a space, `$`, `;` or a
+    quote ran as something else; and a legacy branch of a branch space two
+    objects share (two memory objects on one system, two databases on one
+    Neon branch) got a `restore --at` per key, each of which `restore`
+    refuses. One command per branch space and ref, every value quoted: it
+    parses back into the intended argv, and running it restores both."""
+    import shlex
+
+    monkeypatch.chdir(vcs_root)
+    repo = Repo.init(vcs_root)
+    shared = _mem(repo, key)
+    _mem(repo, f"{key}/2", system=shared)
+    alone = _mem(repo, "alone")
+    store = default_store()
+    ds = repo.config.dataset_id
+    shared_ref = f"tether.ws.{ds}.ab12cd34.shared-0a1b2c"
+    alone_ref = f"tether.ws.{ds}.ab12cd34.alone-0a1b2c"
+    shared_head = store.write(shared, shared_ref, {"uncommitted": 1})
+    alone_head = store.write(alone, alone_ref, {"uncommitted": 2})
+
+    steps = repo.recover_report().steps
+    restores = {
+        s.command: s.note for s in steps if s.command and " restore " in s.command
+    }
+    argvs = sorted(shlex.split(c) for c in restores)
+    assert argvs == sorted(
+        [
+            ["tether", "restore", key, f"{key}/2", "--at", shared_ref],
+            ["tether", "restore", "alone", "--at", alone_ref],
+        ]
+    )
+    together = "share its branch space, so they are restored together"
+    assert [together in note for note in restores.values()].count(True) == 1
+    (commit,) = [s.command for s in steps if s.command and "commit" in s.command]
+    assert shlex.split(commit) == ["tether", "commit", "-m", "Recover main"]
+
+    repo.commit("Recover main")
+    repo.new(bookmark="feat")
+    for argv in argvs:
+        r = runner.invoke(app, argv[1:])
+        assert r.exit_code == 0, (argv, r.output)
+    refs = Repo.find(vcs_root).workspace.working_refs
+    assert refs[key] == refs[f"{key}/2"]
+    assert store.resolve(shared, refs[key]) == shared_head
+    assert store.resolve(alone, refs["alone"]) == alone_head
+
+
+def test_recover_quotes_bookmark_names_and_messages(
+    vcs_root: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """A bookmark name and the commit message carrying it are quoted too (jj
+    takes no `'`, `$` or `;` in a bookmark name; git does)."""
+    import shlex
+
+    repo = Repo.init(vcs_root)
+    system = _mem(repo)
+    repo.commit("baseline")
+    name = "it's$x;y" if repo.vcs.kind == "git" else "café"
+    assert shlex.quote(name) != name
+    repo.new(bookmark=name, eager=True)
+    default_store().write(system, repo.workspace.working_refs["db"], {"x": 1})
+    repo.new("main")
+    (command,) = [
+        s.command
+        for s in repo.recover_report().steps
+        if s.command and "--adopt" in s.command
+    ]
+    assert shlex.split(command) == [
+        "tether", "new", name, "--adopt", "&&",
+        "tether", "commit", "-m", f"Recover {name}",
+    ]  # fmt: skip
 
 
 # --------------------------------------------------------------------------- #
@@ -1166,9 +1332,9 @@ def test_recover_a_lost_dataset_end_to_end(
     (found,) = payload["datasets"]
     assert found["dataset_id"] == old and found["current"] and found["pins"] == 2
     assert [b["bookmark"] for b in found["bookmarks"]] == ["feat"]
-    assert payload["steps"] == [
-        'tether commit -m "Recover main"',
-        'tether new -b feat main --adopt && tether commit -m "Recover feat"',
+    assert [step["command"] for step in payload["steps"]] == [
+        "tether commit -m 'Recover main'",
+        "tether new -b feat main --adopt && tether commit -m 'Recover feat'",
     ]
 
     # The trunk re-commits the state it pinned: the tag is reused, none made.
