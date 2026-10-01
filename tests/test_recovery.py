@@ -1055,7 +1055,7 @@ def test_recover_steers_a_missing_pin_to_repair(
     (row,) = report.objects
     assert row.missing_pin == pin.id
     (step,) = report.steps
-    assert step.command == "tether repair"
+    assert step.command == "tether repair -- db"
     assert step.note.startswith("the manifests of db name pins their stores lack")
     assert "no tether refs" not in step.note
     r = runner.invoke(app, ["recover", "--json"])
@@ -1063,13 +1063,51 @@ def test_recover_steers_a_missing_pin_to_repair(
     assert row["missing_pin"] == pin.id
     r = runner.invoke(app, ["recover"])
     assert f"pin {pin.id} (the manifest's) is missing" in r.stdout
-    assert "  1. tether repair" in r.stdout
+    assert "  1. tether repair -- db\n" in r.stdout
 
     repo.repair()
     assert pin.ref in sys.tags
     report = repo.recover_report()
     assert report.objects[0].missing_pin is None
     assert [s.command for s in report.steps] == ["tether commit -m 'Recover main'"]
+
+
+@pytest.mark.parametrize("scoped", [True, False])
+def test_recover_repairs_only_the_objects_it_lists(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch, scoped: bool
+) -> None:
+    """A scoped run suggested a bare `tether repair`, which reaches every
+    store -- those the run left out on purpose, and perhaps cannot reach,
+    included. Its repair names the selected objects whose pins are missing;
+    an unscoped run's names every one. Run as printed, it repairs those."""
+    import shlex
+
+    monkeypatch.chdir(vcs_root)
+    repo = Repo.init(vcs_root)
+    keys = ["a b", "a c", "intact", "left-out"]
+    systems = {key: _mem(repo, key) for key in keys}
+    repo.commit("baseline")
+    store = default_store()
+    pins = {}
+    for key in ("a b", "a c", "left-out"):
+        pin = repo.objects[key].pin
+        assert pin is not None
+        del store.system(systems[key]).tags[pin.ref]
+        pins[key] = pin
+
+    report = repo.recover_report(["a b", "a c", "intact"] if scoped else None)
+    expected = ["a b", "a c"] if scoped else ["a b", "a c", "left-out"]
+    assert [o.key for o in report.objects if o.missing_pin] == expected
+    step = report.steps[0]
+    assert step.command is not None
+    argv = shlex.split(step.command)
+    assert argv == ["tether", "repair", "--", *expected]
+    assert step.note.startswith(f"the manifests of {', '.join(expected)} name pins")
+
+    r = runner.invoke(app, argv[1:])
+    assert r.exit_code == 0, r.output
+    for key, pin in pins.items():
+        assert (pin.ref in store.system(systems[key]).tags) == (key in expected), key
 
 
 def test_recover_matches_escaped_bookmark_names(

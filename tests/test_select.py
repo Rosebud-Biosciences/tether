@@ -770,3 +770,151 @@ def test_cli_commit_takes_selectors_and_plans_keep_them(
     assert _text(repo, "b") != baseline_b and _dirty(repo, "a", "b", ODD, "c") == ["c"]
     r = runner.invoke(app, ["commit", "nope/", "-m", "x"])
     assert r.exit_code == 1 and "no object under nope/" in r.output, r.output
+
+
+# --------------------------------------------------------------------------- #
+# repair KEY...
+# --------------------------------------------------------------------------- #
+def _lose_pins(repo: Repo, keys: list[str]) -> dict[str, str]:
+    """Delete each object's pin from its store, as by hand; key -> pin id."""
+    lost = {}
+    for key in keys:
+        m = repo.objects[key]
+        assert m.pin is not None
+        del default_store().system(str(m.locator["system"])).tags[m.pin.ref]
+        lost[key] = m.pin.id
+    return lost
+
+
+def _pinned(repo: Repo) -> list[str]:
+    tags = {k: default_store().system(_systems(repo, [k])[0]).tags for k in KEYS}
+    return [k for k in KEYS if (p := repo.objects[k].pin) and p.ref in tags[k]]
+
+
+def test_repair_rebuilds_only_the_selections_pins_and_branches(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`repair` took no keys, so `recover KEY...` steered to a repair of
+    every object, reaching the stores the run had left out."""
+    repo.commit("baseline")
+    repo.new(bookmark="work", eager=True)
+    store = default_store()
+    lost = _lose_pins(repo, KEYS)
+    refs = dict(repo.workspace.working_refs)
+    for key in KEYS:
+        del store.system(_systems(repo, [key])[0]).branches[refs[key]]
+    calls = _spy(monkeypatch, repo.backend_for("memory"), "verify")
+
+    picked = ["db", *KEYS[2:5]]
+    plan = repo.plan_repair(["zarr/", "db", "zarr/imaging"])
+    assert plan.context["keys"] == picked
+    assert sorted((a.op, a.key) for a in plan.actions) == sorted(
+        [("repin", k) for k in picked] + [("refork", k) for k in picked]
+    )
+    assert {p.key for p in plan.preconditions if p.key} == set(picked)
+    assert sorted(calls) == _systems(repo, picked)
+    report = repo.apply_repair(plan)
+    assert report.repinned == {k: lost[k] for k in picked} and not report.failed
+    assert sorted(report.reforked) == picked
+    assert _pinned(repo) == picked
+    for key in KEYS:
+        branches = store.system(_systems(repo, [key])[0]).branches
+        assert (refs[key] in branches) == (key in picked), key
+
+    with pytest.raises(ConfigError, match="no such object: nope"):
+        repo.plan_repair(["db", "nope"])
+    with pytest.raises(ConfigError, match="no object under nope/"):
+        repo.repair(["nope/"])
+    rest = repo.plan_repair()
+    assert "keys" not in rest.context
+    assert sorted({a.key for a in rest.actions}) == ["raw/plate1", "zarrish"]
+    assert sorted(repo.repair(["raw/", "zarrish"]).repinned) == [
+        "raw/plate1",
+        "zarrish",
+    ]
+    assert _pinned(repo) == KEYS
+
+
+def test_repair_all_history_selects_from_every_key_history_has_had(
+    repo: Repo,
+) -> None:
+    repo.commit("baseline")
+    lost = _lose_pins(repo, ["db", "raw/plate1", "zarrish"])
+    repo.remove("raw/plate1")
+    repo.commit("raw/plate1 removed")
+
+    with pytest.raises(ConfigError, match="no object under raw/"):
+        repo.plan_repair(["raw/"])
+    plan = repo.plan_repair(["raw/"], all_history=True)
+    assert plan.context["keys"] == ["raw/plate1"]
+    ((op, label, target),) = [(a.op, a.key, a.target) for a in plan.actions]
+    assert op == "repin" and label.startswith("raw/plate1@")
+    assert target.endswith(lost["raw/plate1"])
+    plan = repo.plan_repair(["db", "zarr/"], all_history=True)
+    assert [a.key for a in plan.actions] == ["db"]  # once, though at every commit
+    with pytest.raises(ConfigError, match="no such object: nope"):
+        repo.plan_repair(["nope"], all_history=True)
+    report = repo.repair(["raw/plate1", "db"], all_history=True)
+    assert sorted(report.repinned.values()) == sorted([lost["db"], lost["raw/plate1"]])
+    assert [a.key for a in repo.plan_repair(all_history=True).actions] == ["zarrish"]
+
+
+def test_a_saved_repair_plan_applies_exactly_its_selection(repo: Repo) -> None:
+    repo.commit("baseline")
+    lost = _lose_pins(repo, ["db", "zarrish"])
+    saved = repo.plan_repair(["db"]).to_json()
+
+    # The selection is part of what the digest vouches for.
+    for edit in (["db", "zarrish"], ["zarrish"], None):
+        data = json.loads(saved)
+        if edit is None:
+            del data["context"]["keys"]
+        else:
+            data["context"]["keys"] = edit
+        with pytest.raises(StalePlanError, match="edited after it was saved"):
+            repo.apply_repair(Plan.from_json(json.dumps(data)))
+    # Keys named at apply must be the plan's.
+    with pytest.raises(ConfigError, match="repairs db, not zarrish"):
+        repo.apply_repair(Plan.from_json(saved), keys=["zarrish"])
+    with pytest.raises(ConfigError, match="repairs every object, not db"):
+        repo.apply_repair(repo.plan_repair(), keys=["db"])
+    assert _pinned(repo) == [k for k in KEYS if k not in lost]
+
+    report = repo.apply_repair(Plan.from_json(saved), keys=["db"])
+    assert report.repinned == {"db": lost["db"]}
+    assert _pinned(repo) == [k for k in KEYS if k != "zarrish"]
+
+
+def test_cli_repair_takes_selectors_and_plans_keep_them(
+    repo: Repo,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    monkeypatch.chdir(repo.root)
+    repo.commit("baseline")
+    lost = _lose_pins(repo, KEYS)
+    saved = tmp_path_factory.mktemp("plans") / "repair.json"
+
+    r = runner.invoke(app, ["repair", "zarr/", "--dry-run", "--json"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["context"]["keys"] == KEYS[2:5]
+    r = runner.invoke(app, ["repair", "db", "--plan", str(saved)])
+    assert r.exit_code == 0, r.output
+    assert json.loads(saved.read_text())["context"]["keys"] == ["db"]
+    r = runner.invoke(app, ["repair", "zarrish", "--from-plan", str(saved)])
+    assert r.exit_code == 1 and "repairs db, not zarrish" in r.output, r.output
+    r = runner.invoke(app, ["repair", "--from-plan", str(saved), "--json"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["repinned"] == {"db": lost["db"]}
+    r = runner.invoke(app, ["repair", "--", "zarr/imaging", "raw/"])
+    assert r.exit_code == 0, r.output
+    assert r.output.splitlines() == [
+        f"repinned  raw/plate1 -> {lost['raw/plate1']}",
+        f"repinned  zarr/imaging -> {lost['zarr/imaging']}",
+    ]
+    assert _pinned(repo) == ["db", "raw/plate1", "zarr/imaging"]
+    r = runner.invoke(app, ["repair", "nope/"])
+    assert r.exit_code == 1 and "no object under nope/" in r.output, r.output
+    r = runner.invoke(app, ["repair", "--all-history", "zarr/", "--json"])
+    assert r.exit_code == 0, r.output
+    assert sorted(json.loads(r.output)["repinned"]) == ["zarr/deep/x", "zarr/labels"]

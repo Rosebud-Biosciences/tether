@@ -49,7 +49,8 @@ class RecoverOps(RepoCore):
         the pins and names the bookmarks under every dataset id it finds,
         this one's and any other's, from the same listings `gc` reads.
         `steps` (each a quoted command, or none, and a note) take them back:
-        `repair` first where a manifest names a pin its store lacks; the id
+        first a `repair` of the objects whose manifest names a pin their
+        store lacks (of the selected ones only, with `keys`); the id
         to set in `tether.toml` when the refs are another dataset's and
         nothing is pinned under this one yet; a `commit` on the trunk, which
         re-pins each upstream branch (a state pinned before reuses its tag);
@@ -143,9 +144,11 @@ class RecoverOps(RepoCore):
         `report.suggested_id`. Nothing is suggested while a selected store
         could not be listed: its refs may name another id or more
         bookmarks, and "nothing found" would steer to a fresh commit. A
-        scoped report suggests nothing that pins: a commit pins every
+        scoped report suggests nothing that pins anew: a commit pins every
         object under the current id, which then can no longer change, and
-        an id found only in a store left out would be lost."""
+        an id found only in a store left out would be lost. Its `repair`
+        names only the selected objects, and recreates only pins their
+        manifests already name."""
         failed = [o.key for o in report.objects if o.error is not None]
         if failed:
             return [
@@ -162,7 +165,7 @@ class RecoverOps(RepoCore):
         if missing:
             steps.append(
                 RecoverStep(
-                    "tether repair",
+                    f"tether repair -- {' '.join(shlex.quote(k) for k in missing)}",
                     f"the manifests of {', '.join(missing)} name pins their stores "
                     "lack; repair recreates them from the recorded states -- a "
                     "`tether commit` does not, the states being unchanged",

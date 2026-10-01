@@ -18,6 +18,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to its head.
 - `tether recover` lists tether's refs in each store by dataset id and prints
   the steps that take back a dataset whose repository was lost.
+- `tether repair KEY...` (`Repo.repair(keys)`) rebuilds only those objects'
+  pins and branches, selected from every key history has had with
+  `--all-history`. A saved plan records its selection under its digest.
 
 ### Changed
 
@@ -59,6 +62,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the shell, and its advice for a legacy branch that objects share (two Neon
   databases on one branch) names them in one `tether restore`, which
   `restore` requires.
+- `tether recover KEY...` suggests `tether repair -- KEY...` for only the
+  selected objects whose pins are missing, instead of a repair of every
+  object that reached the stores the run left out.
 
 ## [0.1.0b5] - 2026-09-25
 

@@ -134,8 +134,9 @@ reset a branch in place. A new dataset under the old id takes them back:
    ```
 
    If a manifest already names a pin its store lacks (a tag deleted by
-   hand, say), the first step is `tether repair` for those objects: a
-   `commit` does not recreate a pin whose state is unchanged.
+   hand, say), the first step is `tether repair -- KEY...` for those
+   objects: a `commit` does not recreate a pin whose state is unchanged.
+   A run scoped to some keys repairs only the selected ones.
 
 3. **Set the id, if it is not the old one.** When the refs carry another id
    and nothing is pinned under this dataset's yet, `recover`'s first step is

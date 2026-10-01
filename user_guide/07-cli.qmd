@@ -35,7 +35,7 @@ tether drop BOOKMARK [--to BOOKMARK] [--delete-stores] [--force-prune] [--dry-ru
 tether forget-workspace [WORKSPACE_ID] [--dry-run | --plan FILE | --from-plan FILE]
 tether ops [-n N]
 tether undo [OP_ID] [--discard]
-tether repair [--all-history] [--dry-run | --plan FILE | --from-plan FILE]
+tether repair [KEY...] [--all-history] [--dry-run | --plan FILE | --from-plan FILE]
 tether recover [KEY...]
 tether upgrade [--ignore-immutable] [--dry-run | --plan FILE | --from-plan FILE]
 tether export PATH [--rev REV]... [--all-history | --no-all-history] [--format sqlite|parquet|csv|jsonl] [--listings] [--workspace] [--append]
@@ -88,9 +88,10 @@ objects named, with the same exit codes and JSON shapes: `status` exits 1
 only for an `error` among them, and `snapshot` leaves the cached states of
 the rest as they were. `verify --rev` and `diff` select from the manifests
 they read, so a key only one side of a `diff` has can be named.
-`verify --all-history` selects from every key history has had. `restore`
-and `promote` select the same way. In Python, `Repo.select_keys` resolves
-selectors, and these methods take them as `keys=`.
+`verify --all-history` and `repair --all-history` select from every key
+history has had. `restore`, `promote` and `repair` select the same way. In
+Python, `Repo.select_keys` resolves selectors, and these methods take them
+as `keys=`.
 
 `commit KEY...` and `pull --key KEY` write a subset, as `git commit PATH`
 does. Only the objects named are fingerprinted and pinned, and only their
@@ -473,7 +474,10 @@ It recreates a pin whose native ref is gone, while the store still has the
 state, and forks again a working branch the store lost, only while it is
 still absent. `--all-history` checks every commit's pins. A pin that points
 elsewhere is reported, never overwritten. `repair --dry-run` also says how
-far each interrupted operation got.
+far each interrupted operation got. `repair KEY...` checks and rebuilds only
+those objects' pins and branches, and contacts only their stores. A saved
+plan records the selection in `context.keys`, under its digest, and
+`KEY...` given with `--from-plan` must be the same selection.
 
 Icechunk never reuses a deleted tag's name, so a repinned pin lives under
 the next *generation* of its id (`tether.<id>.2`, `.3`, ...). The pin id and
@@ -490,9 +494,10 @@ generation where there are several. It lists other datasets' refs too
 prints the next steps, each a command with its values quoted for the shell
 (or none) and a `#` note:
 
-- `tether repair` first, naming the objects whose manifest names a pin
-  their store lacks (`commit` would not recreate it: the state is
-  unchanged);
+- `tether repair -- KEY...` first, for the objects whose manifest names a
+  pin their store lacks (`commit` would not recreate it: the state is
+  unchanged). With `KEY...` it names only the selected ones, so no store
+  left out is contacted;
 - the id to set in `tether.toml`, when the refs carry one other id and
   nothing is pinned under this dataset's yet. With `KEY...` it suggests no
   id and no `commit`: the id applies to every object, and a commit pins

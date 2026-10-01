@@ -1268,6 +1268,12 @@ def undo(
 
 @app.command()
 def repair(
+    keys: list[str] | None = typer.Argument(
+        None,
+        help="Repair only these objects: a key, or a prefix ending in '/' (zarr/); "
+        "default: every object. With --all-history, from every key history has "
+        "had. With --from-plan: the plan's selection, or refused.",
+    ),
     all_history: bool = typer.Option(
         False, "--all-history", help="Also check the pins of every commit in history."
     ),
@@ -1292,19 +1298,23 @@ def repair(
     but the store lost is forked again from the manifest. Pins that exist but
     point elsewhere are reported, not overwritten. Exit code 3 if something
     could not be rebuilt.
+
+    KEY... repairs only those objects: only their pins and working branches
+    are checked, and only their stores contacted.
     """
     _refuse_preview_with_apply(dry_run, plan_out, from_plan)
     repo = _repo()
     try:
         if from_plan is not None:
             plan = _load_plan(from_plan, "repair")
+            report = repo.apply_repair(plan, keys=keys)
         else:
-            plan = repo.plan_repair(all_history=all_history)
+            plan = repo.plan_repair(keys, all_history=all_history)
             if dry_run or plan_out is not None:
                 _save_plan(repo, plan, plan_out)
                 _show_plan(plan, as_json=json_out)
                 return
-        report = repo.apply_repair(plan)
+            report = repo.apply_repair(plan)
     except TetherError as exc:
         _fail(exc)
     if json_out:
@@ -1345,14 +1355,15 @@ def recover(
     `tether.<dataset>.<hash>` and working branches
     `tether.ws.<dataset>.<bookmark>` -- by the dataset id they carry, marks
     the one tether.toml names, and prints the steps, each a command (values
-    quoted for the shell) or none, and a `#` note: `repair` where a
-    manifest names a pin its store lacks, the id to set while nothing is
-    pinned under this one, a `commit` on the trunk, then `new BOOKMARK
-    --adopt` (`-b BOOKMARK TRUNK` where the VCS has no such bookmark) and a
-    `commit` per bookmark, and a `restore --at` per legacy per-workspace
-    branch. With KEYs no dataset id and nothing that pins is suggested: a
-    commit pins every object under the id; the steps end with `tether
-    recover` on every object. Exit 1 if a store could not be listed.
+    quoted for the shell) or none, and a `#` note: `repair` of the objects
+    whose manifest names a pin their store lacks, the id to set while
+    nothing is pinned under this one, a `commit` on the trunk, then `new
+    BOOKMARK --adopt` (`-b BOOKMARK TRUNK` where the VCS has no such
+    bookmark) and a `commit` per bookmark, and a `restore --at` per legacy
+    per-workspace branch. With KEYs no dataset id and nothing that pins
+    anew is suggested, and `repair` names only those: a commit pins every
+    object under the id; the steps end with `tether recover` on every
+    object. Exit 1 if a store could not be listed.
     """
     repo = _repo()
     try:

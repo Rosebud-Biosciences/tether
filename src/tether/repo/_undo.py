@@ -7,7 +7,7 @@ try:  # POSIX advisory locks; Windows has no fcntl and gets no writer lock
     import fcntl
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from tether import manifest as _m
@@ -18,6 +18,7 @@ from tether.backends.base import (
     effective_capabilities,
 )
 from tether.errors import (
+    ConfigError,
     RefMovedError,
     TetherError,
 )
@@ -693,7 +694,12 @@ class UndoOps(RepoCore):
             undo_add_store(self, entry, report)
 
     # -- repair ---------------------------------------------------------------- #
-    def plan_repair(self: Repo, *, all_history: bool = False) -> Plan:
+    def plan_repair(
+        self: Repo,
+        keys: Sequence[str] | None = None,
+        *,
+        all_history: bool = False,
+    ) -> Plan:
         """Compute what `repair` would rebuild without writing anywhere.
 
         A manifest is a promise: "this pin exists and names this state". When
@@ -706,10 +712,28 @@ class UndoOps(RepoCore):
         alone and noted; that is a different problem.
 
         Args:
+            keys: Only these objects (keys, or prefixes ending in `/`; see
+                `select_keys`): only their pins and working branches are
+                checked and recreated, and only their stores contacted.
+                With `all_history`, selected from every key history has
+                had. The plan records the selection (`context["keys"]`).
+                Default: every object.
             all_history: Also check the pins of every manifest in VCS history,
                 not just the working tree's.
+
+        Raises:
+            ConfigError: A selector in `keys` matches no object.
         """
         history_digest = self.vcs.history_digest()
+        known = set(self.objects)
+        history: dict[str, tuple[str, ObjectManifest]] = {}
+        if all_history:
+            for rev, objects in self._iter_history_objects():
+                for key, m in objects.items():
+                    known.add(key)
+                    if m.pin is not None and m.state is not None:
+                        history.setdefault(f"{key}@{rev[:12]}", (key, m))
+        selected = self.select_keys(keys, among=known) if keys else None
         plan = Plan(
             command="repair",
             context={
@@ -718,6 +742,8 @@ class UndoOps(RepoCore):
                 "history_digest": history_digest,
             },
         )
+        if selected is not None:
+            plan.context["keys"] = selected
         plan.require(
             "workspace_id",
             self.workspace.workspace_id,
@@ -755,15 +781,17 @@ class UndoOps(RepoCore):
                 "released by `gc`, branches it made are judged by "
                 "`gc --prune-bookmarks`"
             )
-        targets: dict[str, ObjectManifest] = {}
-        for key, m in self.objects.items():
-            if m.pin is not None and m.state is not None:
-                targets[key] = m
-        if all_history:
-            for rev, objects in self._iter_history_objects():
-                for key, m in objects.items():
-                    if m.pin is not None and m.state is not None:
-                        targets.setdefault(f"{key}@{rev[:12]}", m)
+        wanted = None if selected is None else set(selected)
+        targets: dict[str, ObjectManifest] = {
+            key: m
+            for key, m in self.objects.items()
+            if m.pin is not None
+            and m.state is not None
+            and (wanted is None or key in wanted)
+        }
+        for label, (key, m) in history.items():
+            if wanted is None or key in wanted:
+                targets.setdefault(label, m)
         seen: set[str] = set()
         for label, report in self._verify_manifests(targets, deep=False).items():
             m = targets[label]
@@ -797,6 +825,8 @@ class UndoOps(RepoCore):
             m = self.objects.get(key)
             if m is None or self.on_trunk() or m.state is None:
                 continue
+            if wanted is not None and key not in wanted:
+                continue
             backend = self.backend_for(m.kind)
             if Capability.FORK not in effective_capabilities(
                 backend, m.locator, m.policy
@@ -829,7 +859,9 @@ class UndoOps(RepoCore):
             plan.notes.append("nothing to repair")
         return plan
 
-    def apply_repair(self: Repo, plan: Plan) -> RepairReport:
+    def apply_repair(
+        self: Repo, plan: Plan, *, keys: Sequence[str] | None = None
+    ) -> RepairReport:
         """Execute a plan from `plan_repair`; failures are reported, not raised.
 
         A `refork` recreates a branch the plan found missing, and only while
@@ -837,9 +869,30 @@ class UndoOps(RepoCore):
         of this repository re-creating it waits), and with `expected` absent
         (a clone elsewhere that re-created it in between is refused, not
         reset).
+
+        Args:
+            plan: The plan to apply; what it repairs is its selection
+                (`context["keys"]`, none: every object).
+            keys: The selection the caller means the plan to repair (keys,
+                or prefixes ending in `/`); refused unless it is the plan's.
+
+        Raises:
+            ConfigError: `keys` is not the selection the plan records.
+            StalePlanError: The plan was computed for a different world.
         """
         with self._writer_lock(), self._repo_lock():
             self._verify_plan(plan, "repair")
+            if keys:
+                recorded = plan.context.get("keys")
+                selected = None if recorded is None else sorted(map(str, recorded))
+                asked = self.select_keys(keys, among={*self.objects, *(selected or [])})
+                if asked != selected:
+                    raise ConfigError(
+                        "this repair plan repairs "
+                        + ("every object" if selected is None else ", ".join(selected))
+                        + f", not {', '.join(asked)}; apply it without keys, or "
+                        "re-run the plan with the ones you mean"
+                    )
             report = RepairReport(plan=plan)
             pre = {"workspace": self.workspace.to_toml()}
             op = self._begin_op("repair", plan=plan, pre=pre) if plan.writes else None
@@ -885,9 +938,12 @@ class UndoOps(RepoCore):
                 self._end_op(op, result=report_dict(report))
             return report
 
-    def repair(self: Repo, *, all_history: bool = False) -> RepairReport:
+    def repair(
+        self: Repo, keys: Sequence[str] | None = None, *, all_history: bool = False
+    ) -> RepairReport:
         """Recreate missing pins and working branches from the manifests.
 
-        Equivalent to `apply_repair(plan_repair(...))`.
+        Equivalent to `apply_repair(plan_repair(...))`; `keys` selects the
+        objects as `plan_repair` does.
         """
-        return self.apply_repair(self.plan_repair(all_history=all_history))
+        return self.apply_repair(self.plan_repair(keys, all_history=all_history))
