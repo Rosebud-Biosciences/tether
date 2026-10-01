@@ -46,6 +46,7 @@ from tether.backends.base import (
     ObjectDiff,
     VerifyReport,
     VerifyStatus,
+    base_at,
     canonical_uri,
     local_path,
     register_backend,
@@ -629,7 +630,7 @@ class FileBackend(ObjectBackend):
         return {"uri": canonical_uri(self._uri(locator))}
 
     def fingerprint(self, locator: Locator, working_ref: str | None) -> State:
-        if locator.get("at"):
+        if base_at(locator) is not None:
             raise BackendError(
                 "file objects have no history to detach from (`at`); "
                 "use `--file versioned` on a versioned bucket instead",

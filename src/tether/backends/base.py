@@ -821,6 +821,13 @@ def base_at(locator: Locator) -> str | None:
     return None if value in (None, "") else str(value)
 
 
+def blank_at(value: object) -> bool:
+    """Whether an ``at`` someone gave names no state: ``None``, or a string
+    that is empty or blank. Backends read those as the branch head. A number
+    -- a Delta or Lance version, ``0`` included -- names one."""
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
 def iso_utc(value: Any) -> str | None:
     """Render a datetime / epoch value as an ISO-8601 UTC string for reports."""
     from datetime import UTC, datetime

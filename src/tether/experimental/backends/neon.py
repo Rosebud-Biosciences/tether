@@ -31,6 +31,7 @@ from tether.backends.base import (
     ObjectBackend,
     VerifyReport,
     VerifyStatus,
+    base_at,
     check_expected,
     register_backend,
     wrap_library_errors,
@@ -328,7 +329,7 @@ class NeonBackend(ObjectBackend):
         `BRANCH_IS_STORAGE`: gc never judges a branch by its state alone.
         """
         self._fresh()
-        if locator.get("at"):
+        if base_at(locator) is not None:
             raise BackendError(
                 "neon does not support a detached base (`at`); an LSN is only "
                 "meaningful within the history window -- pin from a branch instead",

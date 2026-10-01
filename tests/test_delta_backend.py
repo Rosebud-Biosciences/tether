@@ -86,6 +86,32 @@ def test_delta_versions_are_addressable(tmp_path: Path) -> None:
         b.pin(loc, s1, "abc")
 
 
+@pytest.mark.parametrize("at", [0, "0"])
+def test_delta_add_at_version_zero(
+    vcs_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at: int | str
+) -> None:
+    """A table's first version is 0, which `add` read as an empty `at` and
+    refused when given as a number."""
+    from typer.testing import CliRunner
+
+    from tether.cli import app
+    from tether.repo import Repo
+
+    uri = str(tmp_path / "t")
+    _write(uri, 1, mode="overwrite")
+    _write(uri, 2)
+    repo = Repo.init(vcs_root)
+    repo.add("api", "delta", {"uri": uri, "at": at})
+    monkeypatch.chdir(vcs_root)
+    r = CliRunner().invoke(app, ["add", "cli", uri, "--kind", "delta", "--at", "0"])
+    assert r.exit_code == 0, r.output
+    repo = Repo.find(vcs_root)
+    repo.commit("version 0")
+    assert repo.objects["api"].state == repo.objects["cli"].state
+    assert repo.objects["api"].state is not None
+    assert repo.objects["api"].state["version"] == 0
+
+
 def test_delta_diff_lists_commits(tmp_path: Path) -> None:
     b = DeltaBackend()
     uri = str(tmp_path / "t")

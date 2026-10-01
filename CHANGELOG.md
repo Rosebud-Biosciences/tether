@@ -40,6 +40,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only, which a newer generation leaves as it was.
 - `restore --at` and `add --at` refuse an empty or blank `REF`. An unset
   variable (`--at "$UNSET"`) used to reset the branch from the upstream head.
+  `--at 0` (and `at=0` from Python) is a version like any other, such as a
+  Delta table's first.
+- A `file` or `neon` object registered with `at = 0` is refused like any
+  other `at`, instead of reading the current head.
 - `tether recover` lists per-workspace branches from before bookmarks, which
   may hold uncommitted writes, with a `restore --at` step for each. It
   suggests no dataset id when run on some keys only, and puts `tether repair`

@@ -14,6 +14,7 @@ from tether.backends.base import (
     ABSENT,
     Capability,
     VerifyStatus,
+    blank_at,
     effective_capabilities,
     fork_ref,
 )
@@ -1184,7 +1185,7 @@ class ForkOps(RepoCore):
         keys: Sequence[str] | None,
         rev: str | None = None,
         *,
-        at: str | None = None,
+        at: str | int | None = None,
         discard: bool = False,
     ) -> Plan:
         """Compute what re-forking `keys` from the pins at `rev` -- or from
@@ -1214,20 +1215,21 @@ class ForkOps(RepoCore):
                 every object's branch.
             rev: Revision whose manifests to take the pins from.
             at: Native ref or state to start each branch from, instead of
-                `rev`.
+                `rev`; a number (a Delta or Lance version, `0` included) is
+                one.
             discard: Reset a branch even if it holds unpinned writes.
 
         Raises:
             ConfigError: A selector matches no registered object, `keys`
                 is empty, not exactly one of `rev` and `at` is given, or
-                `at` is empty or blank.
+                `at` is an empty or blank string.
         """
         if (rev is None) == (at is None):
             raise ConfigError(
                 "restore takes one source: a revision (--from REV) or a native "
                 "ref or state (--at REF)"
             )
-        if at is not None and not at.strip():
+        if at is not None and blank_at(at):
             raise ConfigError(
                 "--at needs a native ref or state; an empty one would start "
                 "the branch from the upstream head"
@@ -1615,7 +1617,7 @@ class ForkOps(RepoCore):
         keys: Sequence[str] | None,
         rev: str | None = None,
         *,
-        at: str | None = None,
+        at: str | int | None = None,
         discard: bool = False,
     ) -> dict[str, str]:
         """Re-fork `keys` from the pins at `rev`, or from the native ref or

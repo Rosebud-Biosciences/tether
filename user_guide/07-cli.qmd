@@ -246,7 +246,7 @@ that is already taken is refused; give that object a key of its own.
 | `--region` | `region` | file (object stores), icechunk, delta |
 | `--host`, `--port` | same | dolt |
 | `--table` | `table` | ducklake (handle scope), iceberg (alias of `identifier`) |
-| `--at ID` / `--pick` | `at` | The initial position that the first commit pins instead of the branch head: a snapshot id, version, commit or tag (all but file and neon); an empty or blank one is refused. `--pick` chooses from `log` interactively. |
+| `--at ID` / `--pick` | `at` | The initial position that the first commit pins instead of the branch head: a snapshot id, version, commit or tag (all but file and neon); an empty or blank one is refused, while `0` is a version like any other. `--pick` chooses from `log` interactively. |
 | `--set k=v` | `k` | `path=`, `identifier=`, `data_path=`, `allow_dirty=1`, ... |
 | `--create` | -- | **Experimental**: make an empty store there first (icechunk, git, a local `file` directory), marked as this dataset's; refused if anything exists there. See [Stores tether created](05-reclaiming-storage.qmd#stores-tether-created). |
 

@@ -36,6 +36,15 @@ def test_walk_files_scandir_matches_rglob(tmp_path: Path) -> None:
     assert walked == rglobbed == {"a/b/deep.txt", "top.txt"}
 
 
+@pytest.mark.parametrize("at", [0, "0", "v1"])
+def test_file_refuses_any_at_zero_included(tmp_path: Path, at: object) -> None:
+    """A file has no history to start from; a numeric `0` used to read as no
+    `at` and fingerprint the current bytes instead."""
+    (tmp_path / "f.txt").write_text("x", encoding="utf-8")
+    with pytest.raises(BackendError, match="no history to detach from"):
+        FileBackend().fingerprint({"uri": str(tmp_path / "f.txt"), "at": at}, None)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="symlinks")
 def test_walk_files_does_not_follow_symlinked_dirs(tmp_path: Path) -> None:
     (tmp_path / "real").mkdir()

@@ -25,6 +25,7 @@ from tether.backends.base import (
     VerifyReport,
     VerifyStatus,
     absolutize_locator,
+    blank_at,
     effective_capabilities,
     tier_of,
 )
@@ -112,11 +113,13 @@ class ObjectOps(RepoCore):
         Raises:
             ConfigError: If `key` exists, is unsafe, or `kind` cannot be built;
                 no key was given and none follows from the locator; or the
-                locator's `at` is empty or blank.
+                locator's `at` is `None` or an empty or blank string (a
+                number, `0` included, is a version; leave `at` out for the
+                head).
             CapabilityError: `create` for a kind without `CREATE`.
             BackendError: `create` where a store already exists.
         """
-        if "at" in locator and not str(locator["at"] or "").strip():
+        if "at" in locator and blank_at(locator["at"]):
             raise ConfigError(
                 "--at needs a native state (snapshot id, version, commit or "
                 "tag); an empty one would mean the branch head"

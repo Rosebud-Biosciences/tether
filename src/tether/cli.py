@@ -1461,7 +1461,9 @@ def restore(
                 ("--from", rev, plan.context.get("from_rev")),
                 ("--at", at, plan.context.get("at")),
             ):
-                if given is not None and given != planned:
+                if given is not None and given != (
+                    None if planned is None else str(planned)
+                ):
                     made = f"{flag} {planned}" if planned is not None else f"no {flag}"
                     _fail(
                         TetherError(
@@ -1481,7 +1483,8 @@ def restore(
             done = repo.apply_restore(plan)
     except TetherError as exc:
         _fail(exc)
-    source = plan.context.get("at") or plan.context.get("from_rev")
+    at_ref = plan.context.get("at")
+    source = at_ref if at_ref is not None else plan.context.get("from_rev")
     if json_out:
         _emit(
             {
@@ -1492,7 +1495,7 @@ def restore(
             as_json=True,
         )
         return
-    copy = f"; {source} is untouched" if plan.context.get("at") else ""
+    copy = f"; {source} is untouched" if at_ref is not None else ""
     for key, ref in sorted(done.items()):
         typer.echo(f"{key} -> {ref}  (from {source}{copy})")
 

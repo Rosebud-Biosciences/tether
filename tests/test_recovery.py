@@ -380,7 +380,7 @@ def test_restore_at_refusals(
     assert _refs(system) == before
 
 
-@pytest.mark.parametrize("at", ["", " ", "\t\n"])
+@pytest.mark.parametrize("at", ["", " ", "\t", "\t\n"])
 def test_an_empty_at_is_refused(
     vcs_root: Path, monkeypatch: pytest.MonkeyPatch, at: str
 ) -> None:
@@ -406,12 +406,74 @@ def test_an_empty_at_is_refused(
     assert r.exit_code == 1 and "--at needs a native ref" in r.stderr, r.output
     assert _refs(system) == before and store.system(system).branches[wref] == scratch
 
-    with pytest.raises(ConfigError, match="--at needs a native state"):
-        repo.add("again", "memory", {"system": system, "branch": "main", "at": at})
+    for given in (at, None):  # an explicit `None` names no state either
+        with pytest.raises(ConfigError, match="--at needs a native state"):
+            repo.add(
+                "again", "memory", {"system": system, "branch": "main", "at": given}
+            )
     args = ["add", "again", "--kind", "memory", "--set", f"system={system}"]
     r = runner.invoke(app, [*args, "--at", at])
     assert r.exit_code == 1 and "--at needs a native state" in r.stderr, r.output
     assert "again" not in Repo.find(vcs_root).objects
+
+
+@pytest.mark.parametrize("at", [0, "0"])
+def test_an_at_of_zero_names_a_state(
+    vcs_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+    at: int | str,
+) -> None:
+    """`0` is a version (Delta's first; here a memory tag named `0`), not an
+    empty `at`: the blank check read a numeric 0 as "" and refused it."""
+    monkeypatch.chdir(vcs_root)
+    store = default_store()
+
+    def with_a_zero_tag(system: str) -> str:
+        zero = store.write(system, "main", {"v": 0})
+        store.system(system).tags["0"] = zero
+        store.write(system, "main", {"v": 1})
+        return zero
+
+    repo = Repo.init(vcs_root)
+    system = _mem(repo)
+    zero = with_a_zero_tag(system)
+    added = f"sys-{uuid.uuid4().hex[:8]}"
+    store.system(added)
+    added_zero = with_a_zero_tag(added)
+
+    repo.add("api", "memory", {"system": added, "branch": "main", "at": at})
+    r = runner.invoke(
+        app,
+        ["add", "cli", "--kind", "memory", "--set", f"system={added}", "--at", "0"],
+    )
+    assert r.exit_code == 0 and "added cli (memory) at 0" in r.stdout, r.output
+    repo = Repo.find(vcs_root)
+    repo.commit("baseline")
+    for key in ("api", "cli"):
+        assert repo.objects[key].state == {"snapshot_id": added_zero}, key
+    assert repo.objects["db"].state != {"snapshot_id": zero}
+
+    repo.new(bookmark="feat", eager=True)
+    wref = repo.workspace.working_refs["db"]
+    assert repo.restore(["db"], at=at) == {"db": wref}
+    assert store.system(system).branches[wref] == zero
+
+    store.write(system, wref, {"v": 2})
+    plan_file = tmp_path_factory.mktemp("plans") / "restore.json"
+    plan_file.write_text(repo.plan_restore(["db"], at=at, discard=True).to_json())
+    r = runner.invoke(
+        app, ["restore", "db", "--at", "0", "--from-plan", str(plan_file)]
+    )
+    assert r.exit_code == 0, r.output
+    assert f"db -> {wref}  (from 0; 0 is untouched)" in r.stdout
+    assert store.system(system).branches[wref] == zero
+
+    store.write(system, wref, {"v": 3})
+    r = runner.invoke(app, ["restore", "db", "--at", "0", "--discard"])
+    assert r.exit_code == 0, r.output
+    assert f"db -> {wref}  (from 0; 0 is untouched)" in r.stdout
+    assert store.system(system).branches[wref] == zero
 
 
 def test_cli_restore_at(
