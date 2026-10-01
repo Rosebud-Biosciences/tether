@@ -24,6 +24,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `tether new --shared` can join a bookmark whose branch is being written,
   such as a preview environment's database. The plan binds to the branch
   still building on the bookmark's pin, not to its head, which moved on.
+- `tether new BOOKMARK` (or `new REV`) to a revision that registers an
+  object the current checkout lacks no longer fails with "this new plan
+  predates the ref_absent/ref_head ... precondition(s)". Its checks now look
+  in the stores the target revision names, which differ when an object was
+  moved.
+- Applying a saved `new` plan refuses to adopt a branch that has a newer
+  generation (`.2`) or is gone, even for a plan saved by 0.1.0b5, which
+  bound an adopt to its head only.
+- `restore --at` and `add --at` refuse an empty or blank `REF`. An unset
+  variable (`--at "$UNSET"`) used to reset the branch from the upstream head.
+- `tether recover` lists per-workspace branches from before bookmarks, which
+  may hold uncommitted writes, with a `restore --at` step for each. It
+  suggests no dataset id when run on some keys only, and puts `tether repair`
+  first when a manifest's pin is missing from its store. It also matches
+  escaped bookmark names (`feature/x`) to the VCS's bookmarks.
 
 ## [0.1.0b5] - 2026-09-25
 

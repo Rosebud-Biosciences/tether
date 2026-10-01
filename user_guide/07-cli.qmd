@@ -244,7 +244,7 @@ that is already taken is refused; give that object a key of its own.
 | `--region` | `region` | file (object stores), icechunk, delta |
 | `--host`, `--port` | same | dolt |
 | `--table` | `table` | ducklake (handle scope), iceberg (alias of `identifier`) |
-| `--at ID` / `--pick` | `at` | The initial position that the first commit pins instead of the branch head: a snapshot id, version, commit or tag (all but file and neon). `--pick` chooses from `log` interactively. |
+| `--at ID` / `--pick` | `at` | The initial position that the first commit pins instead of the branch head: a snapshot id, version, commit or tag (all but file and neon); an empty or blank one is refused. `--pick` chooses from `log` interactively. |
 | `--set k=v` | `k` | `path=`, `identifier=`, `data_path=`, `allow_dirty=1`, ... |
 | `--create` | -- | **Experimental**: make an empty store there first (icechunk, git, a local `file` directory), marked as this dataset's; refused if anything exists there. See [Stores tether created](05-reclaiming-storage.qmd#stores-tether-created). |
 
@@ -390,7 +390,9 @@ bookmark's branch from that recorded state, moving it only from the head the
 plan saw, and `REF` itself is never moved or written. The object then reads
 as `modified` until the next `commit` pins it. The `--discard` rule is the
 same. `--at` is refused on the trunk (re-register the object `--at`, or
-`pull`), for objects that cannot fork, and together with `--from`.
+`pull`), for objects that cannot fork, together with `--from`, and when
+`REF` is empty or blank (`--at "$UNSET"` would otherwise start the branch
+from the upstream head).
 
 ## `promote`
 
@@ -485,11 +487,25 @@ generation where there are several. It lists other datasets' refs too
 (`gc` leaves those alone), and marks the id `tether.toml` names. Then it
 prints the next steps:
 
+- `tether repair` first, naming the objects whose manifest names a pin
+  their store lacks (`commit` would not recreate it: the state is
+  unchanged);
 - the id to set in `tether.toml`, when the refs carry one other id and
-  nothing is pinned under this dataset's yet;
+  nothing is pinned under this dataset's yet. With `KEY...` it suggests no
+  id, since the id applies to every object: run `tether recover` without
+  keys before choosing one;
 - `tether commit` on the trunk;
-- `tether new -b BOOKMARK TRUNK --adopt` and `tether commit`, per bookmark.
+- `tether new BOOKMARK --adopt` and `tether commit`, per bookmark: the VCS
+  bookmark whose escaped name (`feat/x` is `feat-x-1a2b3c` in a branch
+  name) the branch carries, or `-b BOOKMARK TRUNK` to make one. An escaped
+  name no bookmark matches cannot be turned back into the original, so it
+  is taken under the escaped one;
+- `tether restore KEY --at REF` (on a bookmark) per *legacy* branch: a
+  per-workspace branch `tether.ws.<id>.<workspace>.<key>` from before
+  bookmarks, listed under its workspace id, which may hold writes nobody
+  committed.
 
+Refs named like tether's that carry no readable dataset id are listed too.
 It writes nothing, and exits 1 when a store could not be listed. The whole
 procedure: [Recovering a lost dataset repo](14-troubleshooting.qmd#recovering-a-lost-dataset-repo).
 
@@ -583,7 +599,7 @@ Experimental; see [Registries and SQL](10-registries-and-sql.qmd).
 | `ops` | `[{"id", "at", "command", "plan", "result", "pre", "undoes", "undone_by", "status", "parent", "progress", "vcs_commit_gone"}]`, newest first; `parent` names the `drop` an entry is a step of |
 | `undo` | `{"undone": op id, "command", "undo_id", "restored": [str], "irreversible": [str], "skipped": [str]}` |
 | `repair` | `{"repinned": {key: pin_id}, "reforked": {key: ref}, "failed": {target: reason}, "notes": [str]}`; with `--dry-run`: the plan |
-| `recover` | `{"dataset_id", "trunk", "pinned": bool, "suggested_dataset_id": id or null, "objects": [{"key", "kind", "holds_refs": bool, "error": str or null, "datasets": [D]}], "datasets": [D], "steps": [str]}` where `D` is `{"dataset_id", "current": bool, "pins": count, "bookmarks": [{"bookmark", "branch", "generation": n or null, "branches": [refs]}]}`; the top-level `datasets` merges every object's |
+| `recover` | `{"dataset_id", "trunk", "pinned": bool, "suggested_dataset_id": id or null, "scoped": bool, "objects": [{"key", "kind", "holds_refs": bool, "error": str or null, "missing_pin": pin_id or null, "unrecognized": [refs], "datasets": [D]}], "datasets": [D], "steps": [str]}` where `D` is `{"dataset_id", "current": bool, "pins": count, "bookmarks": [{"bookmark", "branch", "generation": n or null, "branches": [refs]}], "legacy": [{"workspace", "branches": [refs]}]}`; the top-level `datasets` merges every object's; `scoped` (keys given) means no id is suggested |
 | `upgrade` | `{"from_version", "to_version", "renamed_pins": {old ref: new ref}, "renamed_branches": {old: new}, "rewritten_commits": {old id: new id}, "refingerprinted": [keys], "rewritten_manifests": [keys], "rewritten_indexes": {file: records}, "copied_listings": [names], "failed": {target: reason}, "vcs_commit"}`; with `--dry-run`: the plan |
 | plan | `{"format": 3, "command", "created_at", "context": {...}, "notes": [str], "preconditions": [{"kind", "expected", "key", "params": {...}, "detail"}], "actions": [{"op", "key", "kind", "target", "detail", "params": {...}}], "digest"}`: what `--plan FILE` writes and `--from-plan` reads. `digest` is the SHA-256 of the rest; precondition kinds are `tether.plan.PRECONDITION_KINDS`. |
 | `export` | `{"path", "format", "head", "rows": {table: count}}` |
