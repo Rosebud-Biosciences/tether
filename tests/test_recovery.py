@@ -380,6 +380,40 @@ def test_restore_at_refusals(
     assert _refs(system) == before
 
 
+@pytest.mark.parametrize("at", ["", " ", "\t\n"])
+def test_an_empty_at_is_refused(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch, at: str
+) -> None:
+    """Backends read an empty `at` as none: `restore --at "$UNSET"` reset
+    the branch from the upstream head, and `add --at ""` registered the
+    head instead of a chosen state."""
+    monkeypatch.chdir(vcs_root)
+    repo = Repo.init(vcs_root)
+    system = _mem(repo)
+    repo.commit("baseline")
+    _outside_refs(system)
+    repo.new(bookmark="feat", eager=True)
+    wref = repo.workspace.working_refs["db"]
+    store = default_store()
+    scratch = store.write(system, wref, {"scratch": 1})
+    before = _refs(system)
+
+    with pytest.raises(ConfigError, match="--at needs a native ref or state"):
+        repo.plan_restore(["db"], at=at, discard=True)
+    with pytest.raises(ConfigError, match="--at needs a native ref or state"):
+        repo.restore(["db"], at=at, discard=True)
+    r = runner.invoke(app, ["restore", "db", "--at", at, "--discard"])
+    assert r.exit_code == 1 and "--at needs a native ref" in r.stderr, r.output
+    assert _refs(system) == before and store.system(system).branches[wref] == scratch
+
+    with pytest.raises(ConfigError, match="--at needs a native state"):
+        repo.add("again", "memory", {"system": system, "branch": "main", "at": at})
+    args = ["add", "again", "--kind", "memory", "--set", f"system={system}"]
+    r = runner.invoke(app, [*args, "--at", at])
+    assert r.exit_code == 1 and "--at needs a native state" in r.stderr, r.output
+    assert "again" not in Repo.find(vcs_root).objects
+
+
 def test_cli_restore_at(
     vcs_root: Path,
     monkeypatch: pytest.MonkeyPatch,

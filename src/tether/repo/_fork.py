@@ -1243,12 +1243,18 @@ class ForkOps(RepoCore):
 
         Raises:
             ConfigError: A selector matches no registered object, `keys`
-                is empty, or not exactly one of `rev` and `at` is given.
+                is empty, not exactly one of `rev` and `at` is given, or
+                `at` is empty or blank.
         """
         if (rev is None) == (at is None):
             raise ConfigError(
                 "restore takes one source: a revision (--from REV) or a native "
                 "ref or state (--at REF)"
+            )
+        if at is not None and not at.strip():
+            raise ConfigError(
+                "--at needs a native ref or state; an empty one would start "
+                "the branch from the upstream head"
             )
         if keys is not None and not keys:
             raise ConfigError(
