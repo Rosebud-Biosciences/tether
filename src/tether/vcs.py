@@ -1740,7 +1740,12 @@ class GitAdapter:
 
     def resolve(self, rev: str) -> str:
         out = self._git(
-            "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}", check=False
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            f"{rev}^{{commit}}",
+            check=False,
         )
         commit = out.stdout.strip()
         if out.returncode != 0 or not commit:
@@ -1751,13 +1756,22 @@ class GitAdapter:
         return self.resolve("HEAD")
 
     def read_file_at(self, rev: str, relpath: str) -> str | None:
-        out = self._git("show", f"{rev}:{relpath}", check=False)
+        out = self._git("show", "--end-of-options", f"{rev}:{relpath}", check=False)
         if out.returncode != 0:
             return None
         return out.stdout
 
     def list_files_at(self, rev: str, reldir: str) -> list[str]:
-        out = self._git("ls-tree", "-r", "--name-only", rev, "--", reldir, check=False)
+        out = self._git(
+            "ls-tree",
+            "-r",
+            "--name-only",
+            "--end-of-options",
+            rev,
+            "--",
+            reldir,
+            check=False,
+        )
         if out.returncode != 0:
             return []
         return [line.strip() for line in out.stdout.splitlines() if line.strip()]
@@ -1885,7 +1899,7 @@ class GitAdapter:
         if position.get("kind") != "git":
             raise VcsError("position was not recorded by git")
         if position.get("branch"):
-            self._git("switch", str(position["branch"]))
+            self._git("switch", "--end-of-options", str(position["branch"]))
         elif position.get("commit"):
             self._git("switch", "--detach", str(position["commit"]))
 
@@ -1913,7 +1927,7 @@ class GitAdapter:
             "rev-parse", "--verify", "--quiet", f"refs/heads/{rev}", check=False
         )
         if is_branch.returncode == 0 and is_branch.stdout.strip():
-            self._git("switch", rev)
+            self._git("switch", "--end-of-options", rev)
             return
         # A commit, tag, or other commit-ish: never leave HEAD detached, or the
         # dataset commits made here become unreachable the moment the user
@@ -1952,7 +1966,7 @@ class GitAdapter:
         self._git("update-ref", f"refs/heads/{name}", commit)
 
     def bookmark_delete(self, name: str) -> None:
-        self._git("branch", "-D", name)
+        self._git("branch", "-D", "--end-of-options", name)
 
     def exclusive_commits(self, bookmark: str) -> list[str]:
         marks = self.bookmarks()
@@ -1983,7 +1997,7 @@ class GitAdapter:
     def drop_bookmark(self, bookmark: str, commits: list[str]) -> None:
         # Deleting the branch is the whole operation: nothing else reaches
         # its exclusive commits, so `rev-list --all` stops seeing them.
-        self._git("branch", "-D", bookmark)
+        self._git("branch", "-D", "--end-of-options", bookmark)
 
     def current_bookmarks(self) -> list[str]:
         out = self._git("symbolic-ref", "--short", "-q", "HEAD", check=False)
@@ -1997,7 +2011,14 @@ class GitAdapter:
         self._git(*args)
 
     def is_ancestor(self, ancestor: str, rev: str) -> bool:
-        out = self._git("merge-base", "--is-ancestor", ancestor, rev, check=False)
+        out = self._git(
+            "merge-base",
+            "--is-ancestor",
+            "--end-of-options",
+            ancestor,
+            rev,
+            check=False,
+        )
         return out.returncode == 0
 
     def commit_alive(self, commit: str) -> bool:

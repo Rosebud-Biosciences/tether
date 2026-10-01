@@ -73,6 +73,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `tether recover`'s commands end their options with `--`, so a key such as
   `--help` or `-x`, or a git branch name starting with `-`, is not read as
   an option.
+- git: a branch whose name starts with `-` (`git update-ref` makes one) is
+  read as a name by every git call tether makes, so `tether new -- -feat`
+  switches to it instead of failing to resolve it.
 
 ## [0.1.0b5] - 2026-09-25
 

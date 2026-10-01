@@ -1433,7 +1433,8 @@ def test_recover_ends_options_before_a_bookmark_that_starts_with_a_dash(
     """git keeps a branch whose name starts with `-` (`git update-ref` makes
     one; `git branch` refuses), which `tether new NAME --adopt` read as
     options; jj quotes such a name (`"-feat"`). The name comes after `--`,
-    where the CLI reads it as the revision."""
+    where the CLI reads it as the revision, and git's own commands read it
+    after `--end-of-options`, so the generated step runs."""
     monkeypatch.chdir(vcs_root)
     repo = Repo.init(vcs_root)
     system = _mem(repo)
@@ -1459,13 +1460,14 @@ def test_recover_ends_options_before_a_bookmark_that_starts_with_a_dash(
         ["tether", "commit", "-m", f"Recover {name}"],
     ]
     r = runner.invoke(app, ["new", "--adopt", "--dry-run", "--", name])
-    if repo.vcs.kind == "jj":
-        assert r.exit_code == 0 and wref in r.stdout, r.output
-        return
-    assert runner.invoke(app, ["new", name, "--adopt", "--dry-run"]).exit_code == 2
-    # Past the CLI, git's own `rev-parse` reads the name as an option.
-    assert r.exit_code == 1, r.output
-    assert f"could not resolve revision: {name}" in r.output
+    assert r.exit_code == 0 and wref in r.stdout, r.output
+    if repo.vcs.kind == "git":
+        assert runner.invoke(app, ["new", name, "--adopt", "--dry-run"]).exit_code == 2
+    r = runner.invoke(app, ["new", "--adopt", "--", name])
+    assert r.exit_code == 0, r.output
+    repo = Repo.find(vcs_root)
+    assert repo.workspace.bookmark == name
+    assert repo.workspace.working_refs == {"db": wref}
 
 
 # --------------------------------------------------------------------------- #

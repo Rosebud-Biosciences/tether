@@ -540,6 +540,34 @@ def test_detect_prefers_jj_when_colocated(vcs_root: Path) -> None:
     assert Path(vcs.root) == vcs_root
 
 
+def test_git_reads_a_branch_name_that_starts_with_a_dash(vcs_root: Path) -> None:
+    """`git update-ref` keeps a branch named `-feat` (`git branch` refuses to
+    make one); every git call that takes a revision or branch name reads it
+    after `--end-of-options`, never as an option."""
+    vcs = detect_vcs(vcs_root)
+    if vcs.kind != "git":
+        pytest.skip("git only: jj quotes such a name")
+    _write(vcs_root, "tether.toml", "v=1\n")
+    base = vcs.commit(["tether.toml"], "first")
+    trunk = vcs.current_bookmarks()[0]
+    subprocess.run(
+        ["git", "update-ref", "refs/heads/-feat", base], cwd=vcs_root, check=True
+    )
+    assert vcs.resolve("-feat") == base
+    assert vcs.read_file_at("-feat", "tether.toml") == "v=1\n"
+    assert vcs.list_files_at("-feat", ".") == ["tether.toml"]
+    assert vcs.is_ancestor(base, "-feat")
+    vcs.new("-feat")
+    assert vcs.current_bookmarks() == ["-feat"]
+    vcs.goto({"kind": "git", "branch": trunk})
+    assert vcs.current_bookmarks() == [trunk]
+    vcs.goto({"kind": "git", "branch": "-feat"})
+    assert vcs.current_bookmarks() == ["-feat"]
+    vcs.new(trunk)
+    vcs.bookmark_delete("-feat")
+    assert "-feat" not in vcs.bookmarks()
+
+
 def test_new_never_leaves_git_detached(vcs_root: Path) -> None:
     vcs = detect_vcs(vcs_root)
     _write(vcs_root, "tether.toml", "v=1\n")
