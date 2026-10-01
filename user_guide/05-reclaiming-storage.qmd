@@ -67,11 +67,12 @@ target cannot apply under checks that describe another plan. The digest
 detects edits; it does not authenticate, since whoever can write the file
 can recompute it. Plans saved before 0.1.0b4 (format 2, no digest) or
 0.1.0b1 (format 1, no preconditions) are refused with "re-run the plan".
+<!-- Legacy, removed at 0.1.0: the sentence on formats 1 and 2 -->
 
 | Command | Required preconditions | Per object |
 | --- | --- | --- |
 | `commit` | `workspace_id`, `workspace_bookmark`, `manifest_hash` | -- |
-| `new` | `workspace_id`, `manifest_hash` | each `fork`: `ref_head` (the branch exists) or `ref_absent`; each `reuse`: `ref_head`; each `adopt`: `ref_present` (`ref_head` in plans saved by 0.1.0b5) |
+| `new` | `workspace_id`, `manifest_hash` | each `fork`: `ref_head` (the branch exists) or `ref_absent`; each `reuse`: `ref_head`; each `adopt`: `ref_present` (`ref_head` in plans saved by 0.1.0b5) <!-- Legacy, removed at 0.1.0: the parenthesis --> |
 | `restore` | `workspace_id`, `workspace_bookmark`, `manifest_hash` | each `fork`: `ref_head` or `ref_absent` |
 | `promote` | `workspace_id`, `workspace_bookmark`, `bookmark_head`, `manifest_hash` | each `fast-forward` or `merge`: `base_state`, and `ref_head` or `pin_state` |
 | `drop` | `workspace_id`, `workspace_bookmark`, `bookmark_head`, `no_new_holders`, `vcs_head`, `history_digest` | -- |
@@ -338,7 +339,7 @@ each system and keeps those of every bookmark the VCS still has, or a live
 checkout works on. It also keeps any `--keep-bookmark NAME` (a bookmark that
 exists only on another machine), and every branch a live checkout has as
 its working ref or pending fork. It judges the rest by their head: gone
-bookmarks' branches, this bookmark's branches that no current object uses,
+bookmarks' branches, this bookmark's branches that no current object uses, <!-- Legacy, removed at 0.1.0: the legacy-branch clause next -->
 and legacy per-workspace branches from before bookmarks. This table is the
 one place the verdicts are defined; `drop` adds
 [one rule of its own](04-branching-and-writing.qmd#throwing-it-away-tether-drop):

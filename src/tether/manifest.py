@@ -206,6 +206,7 @@ def bookmark_slug(bookmark: str) -> str:
 
 
 def key_digest6(key: str) -> str:
+    # Legacy, removed at 0.1.0: only the upgrade's ref renames call it
     """The 6-hex key digest legacy working-ref names end in (v2 migration)."""
     return _blake(canonical_bytes(key), size=8)[:6]
 
@@ -242,6 +243,8 @@ def _working_ref_parts(ref: str) -> tuple[str, str, str | None] | None:
         return None
     if (m := _GENERATION.match(rest)) is not None:
         rest = m.group("name")
+    # Legacy, removed at 0.1.0: per-workspace working-ref parsing (and the
+    # third element of the tuple)
     head, dot, tail = rest.partition(".")
     if dot and tail and is_dataset_id(head):
         # Pre-bookmark name: `tether.ws.<ds8>.<ws8>.<slug>-<key6>`.
@@ -267,10 +270,12 @@ def working_ref_bookmark(ref: str) -> str | None:
     """The bookmark slug a working ref stands for; ``None`` for legacy
     per-workspace names (see `working_ref_workspace`) and foreign refs."""
     parts = _working_ref_parts(ref)
+    # Legacy, removed at 0.1.0: the `parts[2] is None` per-workspace test
     return parts[1] if parts and parts[2] is None else None
 
 
 def working_ref_workspace(ref: str) -> str | None:
+    # Legacy, removed at 0.1.0: the workspace id of a per-workspace ref
     """The 8-char workspace id in a *legacy* working ref name (before
     bookmarks); ``None`` for bookmark-named refs."""
     parts = _working_ref_parts(ref)

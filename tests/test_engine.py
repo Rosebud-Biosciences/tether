@@ -2227,6 +2227,8 @@ def test_gc_prunes_stray_branches_only_when_nothing_is_lost(vcs_root: Path) -> N
     branches[f"tether.ws.{ds}.old-c"] = s2
     store.write(system, f"tether.ws.{ds}.old-c", {"v": 99})  # unpinned: keep
     branches[f"tether.ws.{ds}.elsewhere"] = s2  # a bookmark on another machine
+    # Legacy, removed at 0.1.0: the per-workspace branch (and its asserts below,
+    # and its delete among the 3 writes)
     branches[f"tether.ws.{ds}.aaaa0001.db-9f2e1c"] = s1  # legacy, dead workspace
     branches["tether.ws.ffffffff.old-a"] = s3  # another dataset's: not ours
     branches["feature-x"] = s2  # not a tether branch: never considered
@@ -2244,6 +2246,7 @@ def test_gc_prunes_stray_branches_only_when_nothing_is_lost(vcs_root: Path) -> N
     assert "head is pinned" in by_ref[f"tether.ws.{ds}.old-b"].detail
     assert by_ref[f"tether.ws.{ds}.old-c"].op == "keep-branch"
     assert "unpinned writes" in by_ref[f"tether.ws.{ds}.old-c"].detail
+    # Legacy, removed at 0.1.0: the per-workspace branch's verdict
     legacy = by_ref[f"tether.ws.{ds}.aaaa0001.db-9f2e1c"]
     assert legacy.op == "delete-branch" and "legacy workspace aaaa0001" in legacy.detail
     assert f"tether.ws.{ds}.elsewhere" not in by_ref and "feature-x" not in by_ref
@@ -2253,6 +2256,7 @@ def test_gc_prunes_stray_branches_only_when_nothing_is_lost(vcs_root: Path) -> N
     report = repo.gc(dry_run=False, prune_bookmarks=True, keep_bookmarks={"elsewhere"})
     assert f"tether.ws.{ds}.old-a" not in branches
     assert f"tether.ws.{ds}.old-b" not in branches
+    # Legacy, removed at 0.1.0: the per-workspace branch went
     assert f"tether.ws.{ds}.aaaa0001.db-9f2e1c" not in branches
     assert f"tether.ws.{ds}.old-c" in branches  # kept: has data
     assert f"tether.ws.{ds}.elsewhere" in branches and "feature-x" in branches
@@ -3783,6 +3787,7 @@ def test_new_binds_a_branch_it_keeps_or_resets_to_its_head(vcs_root: Path) -> No
 def test_a_saved_new_plan_that_bound_an_adopt_to_its_head_still_applies(
     vcs_root: Path, tmp_path: Path, how: str
 ) -> None:
+    # Legacy, removed at 0.1.0: builds a 0.1.0b5-shaped adopt plan by hand
     """Plans saved by 0.1.0b5 and earlier bound each `adopt` to the head they
     saw (`ref_head`). Such a plan still verifies, and binds as it did:
     refused while the head is elsewhere, applied once it is back."""
@@ -3823,6 +3828,7 @@ def test_a_saved_new_plan_that_bound_an_adopt_to_its_head_still_applies(
 def test_a_saved_new_plan_bound_to_a_head_refuses_a_superseded_branch(
     vcs_root: Path, tmp_path: Path, how: str
 ) -> None:
+    # Legacy, removed at 0.1.0: builds a 0.1.0b5-shaped adopt plan by hand
     """A newer generation beside the adopted branch leaves its head as it
     was, so a plan saved by 0.1.0b5 (`ref_head` only) passed its own checks
     and adopted the stale branch. Apply checks every adopt's branch is

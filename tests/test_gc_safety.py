@@ -226,6 +226,7 @@ def test_gc_keeps_pins_this_clone_did_not_create(
 
 
 def test_pinned_index_is_seeded_from_the_op_logs(vcs_root: Path) -> None:
+    # Legacy, removed at 0.1.0: the pin-index seeding
     """A clone from before the index: its own pins are what its `commit`
     entries recorded, so the first gc knows them and releases the
     unreferenced ones, and keeps a pin no op log explains."""
@@ -334,6 +335,7 @@ def test_gc_and_verify_skip_history_of_a_backend_tether_no_longer_has(
 def test_pinned_index_seed_claims_only_pins_this_clone_created(
     vcs_root: Path, tmp_path: Path
 ) -> None:
+    # Legacy, removed at 0.1.0: the pin-index seeding
     """The seed read each commit's `pinned` result, which also names pins
     that already existed -- another clone's, taken over by a `pull` -- so
     those became this clone's to release. Only a progress record the
@@ -475,6 +477,8 @@ def test_gc_skips_another_checkouts_state_file_the_vcs_tracks(
             check=True,
             capture_output=True,
         )
+    # Legacy, removed at 0.1.0: relies on the pin-index seeding (the ops.jsonl
+    # case tests nothing without it)
     pinned_path(a.vcs.shared_dir()).unlink()  # the next gc seeds from op logs
 
     a = Repo.find(vcs_root)
@@ -530,6 +534,7 @@ def test_a_released_pin_recreated_by_another_clone_is_not_released_again(
     store = default_store().system(system)
     assert f"tether.{pid}" not in store.tags
     assert pid not in repo._known_pins()
+    # Legacy, removed at 0.1.0: the `gc-then-reseed` case of the pin-index seeding
     if how == "gc-then-reseed":
         pinned_path(repo.vcs.shared_dir()).unlink()
         assert pid not in Repo.find(vcs_root)._known_pins()

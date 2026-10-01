@@ -91,9 +91,11 @@ class RecoverOps(RepoCore):
             if Capability.FORK in caps:
                 for ref in backend.list_working_refs(m.locator):
                     ds, slug = working_ref_dataset(ref), working_ref_bookmark(ref)
+                    # Legacy, removed at 0.1.0: per-workspace branches' workspace
                     ws = working_ref_workspace(ref)
                     if ds is not None and slug is not None:
                         under(ds).bookmarks.setdefault(slug, []).append(ref)
+                    # Legacy, removed at 0.1.0: listing per-workspace branches
                     elif ds is not None and ws is not None:
                         under(ds).legacy.setdefault(ws, []).append(ref)
                     else:
@@ -101,6 +103,7 @@ class RecoverOps(RepoCore):
             for refs in found.namespaces.values():
                 for branches in refs.bookmarks.values():
                     branches.sort(key=lambda ref: working_ref_generation(ref) or 1)
+                # Legacy, removed at 0.1.0: sorting per-workspace branches
                 for branches in refs.legacy.values():
                     branches.sort()
             found.unrecognized.sort()
@@ -253,6 +256,7 @@ class RecoverOps(RepoCore):
                     f"tether new -b {slug} {trunk} --adopt && tether commit -m "
                     f'"Recover {slug}"'
                 )
+        # Legacy, removed at 0.1.0: the `restore --at` step per legacy branch
         for o in report.objects:
             legacy = o.namespaces[target].legacy if target in o.namespaces else {}
             for ws, branches in sorted(legacy.items()):

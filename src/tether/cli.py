@@ -84,6 +84,7 @@ def _root(
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+# Legacy, removed at 0.1.0: the `allow_outdated` argument (only `upgrade` passes it)
 def _repo(*, allow_outdated: bool = False) -> Repo:
     try:
         return Repo.find(".", allow_outdated=allow_outdated)
@@ -1386,6 +1387,7 @@ def recover(
             typer.echo(
                 f"    {ds}{mine}: {len(refs.pins)} pin(s); bookmarks: {marks or 'none'}"
             )
+            # Legacy, removed at 0.1.0: recover's per-workspace branch lines
             for ws, branches in sorted(refs.legacy.items()):
                 typer.echo(
                     f"      legacy branches of workspace {ws}: {', '.join(branches)}"
@@ -1707,6 +1709,7 @@ def drop(
         _print_gc_report(gc)
 
 
+# Legacy, removed at 0.1.0: the `upgrade` command
 @app.command()
 def upgrade(
     dry_run: bool = typer.Option(

@@ -494,6 +494,7 @@ def test_fork_onto_an_existing_branch_restores_it(backend: NeonBackend) -> None:
 
 
 def test_rename_pin_and_branch_in_place(backend: NeonBackend) -> None:
+    # Legacy, removed at 0.1.0: the upgrade's renames
     """Pins are branches with children; renames must not delete and recreate."""
     fake = FakeNeon()
     with respx.mock as router:

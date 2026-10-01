@@ -86,6 +86,7 @@ def test_ref_and_slug_helpers() -> None:
         working_ref_bookmark,
         working_ref_dataset,
         working_ref_generation,
+        # Legacy, removed at 0.1.0: per-workspace ref parsing (and its asserts)
         working_ref_workspace,
     )
 
@@ -112,7 +113,7 @@ def test_ref_and_slug_helpers() -> None:
     hexish = working_ref_name("0a1b2c3d", "deadbeef")
     assert working_ref_bookmark(f"{hexish}.3") == "deadbeef"
     assert working_ref_workspace(f"{hexish}.3") is None
-    # Legacy per-workspace names are still recognised as ours, for gc.
+    # Legacy, removed at 0.1.0: per-workspace names, recognised as ours for gc
     legacy = "tether.ws.0a1b2c3d.abcd1234.zarr-imaging-9f2e1c"
     assert working_ref_dataset(legacy) == "0a1b2c3d"
     assert working_ref_workspace(legacy) == "abcd1234"

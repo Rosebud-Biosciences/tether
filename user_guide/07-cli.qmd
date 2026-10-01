@@ -504,6 +504,7 @@ prints the next steps:
   per-workspace branch `tether.ws.<id>.<workspace>.<key>` from before
   bookmarks, listed under its workspace id, which may hold writes nobody
   committed.
+  <!-- Legacy, removed at 0.1.0: recover's legacy-branch step -->
 
 Refs named like tether's that carry no readable dataset id are listed too.
 It writes nothing, and exits 1 when a store could not be listed. The whole
@@ -599,7 +600,7 @@ Experimental; see [Registries and SQL](10-registries-and-sql.qmd).
 | `ops` | `[{"id", "at", "command", "plan", "result", "pre", "undoes", "undone_by", "status", "parent", "progress", "vcs_commit_gone"}]`, newest first; `parent` names the `drop` an entry is a step of |
 | `undo` | `{"undone": op id, "command", "undo_id", "restored": [str], "irreversible": [str], "skipped": [str]}` |
 | `repair` | `{"repinned": {key: pin_id}, "reforked": {key: ref}, "failed": {target: reason}, "notes": [str]}`; with `--dry-run`: the plan |
-| `recover` | `{"dataset_id", "trunk", "pinned": bool, "suggested_dataset_id": id or null, "scoped": bool, "objects": [{"key", "kind", "holds_refs": bool, "error": str or null, "missing_pin": pin_id or null, "unrecognized": [refs], "datasets": [D]}], "datasets": [D], "steps": [str]}` where `D` is `{"dataset_id", "current": bool, "pins": count, "bookmarks": [{"bookmark", "branch", "generation": n or null, "branches": [refs]}], "legacy": [{"workspace", "branches": [refs]}]}`; the top-level `datasets` merges every object's; `scoped` (keys given) means no id is suggested |
+| `recover` | `{"dataset_id", "trunk", "pinned": bool, "suggested_dataset_id": id or null, "scoped": bool, "objects": [{"key", "kind", "holds_refs": bool, "error": str or null, "missing_pin": pin_id or null, "unrecognized": [refs], "datasets": [D]}], "datasets": [D], "steps": [str]}` where `D` is `{"dataset_id", "current": bool, "pins": count, "bookmarks": [{"bookmark", "branch", "generation": n or null, "branches": [refs]}], "legacy": [{"workspace", "branches": [refs]}]}`; <!-- Legacy, removed at 0.1.0: recover's `legacy` key --> the top-level `datasets` merges every object's; `scoped` (keys given) means no id is suggested |
 | `upgrade` | `{"from_version", "to_version", "renamed_pins": {old ref: new ref}, "renamed_branches": {old: new}, "rewritten_commits": {old id: new id}, "refingerprinted": [keys], "rewritten_manifests": [keys], "rewritten_indexes": {file: records}, "copied_listings": [names], "failed": {target: reason}, "vcs_commit"}`; with `--dry-run`: the plan |
 | plan | `{"format": 3, "command", "created_at", "context": {...}, "notes": [str], "preconditions": [{"kind", "expected", "key", "params": {...}, "detail"}], "actions": [{"op", "key", "kind", "target", "detail", "params": {...}}], "digest"}`: what `--plan FILE` writes and `--from-plan` reads. `digest` is the SHA-256 of the rest; precondition kinds are `tether.plan.PRECONDITION_KINDS`. |
 | `export` | `{"path", "format", "head", "rows": {table: count}}` |

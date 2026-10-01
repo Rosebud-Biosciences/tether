@@ -146,19 +146,58 @@ fixture in `tests/`.
 Before removal: publish the last beta, confirm `tether upgrade` from every
 alpha format and from 0.1.0b3 against it once more, and write the "install
 `tether-vcs==<last beta>`, upgrade, reinstall" message into the open-time
-error (`LAST_BETA_WITH_UPGRADE` names it). Then remove, in one revision:
+error (`LAST_BETA_WITH_UPGRADE` names it). Then remove, in one revision.
+Outside `tether.upgrade` and `tests/upgrade/` (both go wholesale), every
+legacy-only site in `src/`, `tests/` and `user_guide/` carries the marker
+`Legacy, removed at 0.1.0` (a `#` comment in code, an HTML comment in the
+guide): `rg 'Legacy, removed at 0.1.0'` lists them, and none may remain.
 
-- the `tether.upgrade` package, the `upgrade` CLI command, and the thin
-  `Repo.plan_upgrade` / `apply_upgrade` / `upgrade` delegates;
+- the `tether.upgrade` package and `tests/upgrade/`, the `upgrade` CLI
+  command, and the thin `Repo.plan_upgrade` / `apply_upgrade` / `upgrade`
+  delegates (with the `config_version` precondition kind only upgrade plans
+  carry, and `key_digest6`, which only its ref renames call);
 - `Repo.find(allow_outdated=)` and the `allow_outdated` constructor argument,
   which exist only so `upgrade` can open an older dataset;
 - `ObjectBackend.rename_pin` and `rename_working_ref` (and the Neon
   override), which only the ref-renaming migration calls;
 - `working_ref_workspace` and the legacy per-workspace working-ref parsing
   (`gc --prune-bookmarks`'s "legacy branch" arm), the `UpgradeReport`
-  re-export, and the Migrations section of `great-docs.yml`;
-- the `upgrade` section of the CLI guide, replaced by the open-time message;
+  re-export, and the Migrations section of `great-docs.yml`. Once unparsed,
+  a per-workspace name would read as a bookmark slug with a dot in it, which
+  `bookmark_slug` never makes: refuse those as unrecognized;
+- `recover`'s listing of legacy per-workspace branches: `RecoveredRefs.legacy`,
+  its `legacy` JSON key (a documented output change, for the changelog), its
+  `restore --at` step and CLI lines, the half of its test that covers them,
+  and the recovery step in the troubleshooting guide;
+- the `ref_head` alternative for an `adopt` in
+  `REQUIRED_ACTION_PRECONDITIONS["new"]` (plans saved by 0.1.0b5),
+  `_require_adopted_present`, which `ref_present` makes redundant then, and
+  the two tests that build b5-shaped plans by hand;
+- the refusals of plan formats 1 and 2 (`_UNBOUND_FORMATS`): they collapse
+  into the one "unsupported plan format" refusal;
+- seeding the pin-ownership index (`tether-pinned.jsonl`) from the op logs
+  (`Repo._seed_pinned`), for clones made before the index: **decide** then
+  whether to move it into the last beta's `upgrade` or keep it. Kept, nothing
+  changes; moved, a clone that skipped that beta keeps every pin it made as
+  foreign until `gc --release-foreign`, and the tests that unlink the index
+  to exercise the seed go too;
+- the `upgrade` mentions in the guide, rewritten for the open-time message:
+  the CLI guide's synopsis line and `upgrade` section; the troubleshooting
+  rows for `ConfigError` and `tether.toml is version 4`; the configuration
+  guide's version, dataset-id and `write`-policy lines; the DuckLake
+  locator row; the `rename_pin` row of the extending guide; the planned
+  commands in `great-docs.yml` and the README; and the docstrings and
+  `--prune-bookmarks` help that name legacy branches;
 - freeze `CONFIG_VERSION` for 0.1.x.
+
+Not part of the removal, though they mention older versions: the lenient
+`[dataset] id` parse of a version 1 `tether.toml` (so the open-time message,
+not a parse error, meets an alpha dataset); skipping history manifests of
+removed kinds (lakeFS) and Iceberg's volatile `metadata_location`, since
+history keeps those manifests; `upgrade` in the op log's `NOT_UNDOABLE`, its
+summary, and `vcs_drift` following its `rewritten_commits`, since op logs
+keep those entries; and the `accepts_expected` shim for third-party backends
+without the `expected` keyword, a backend-author decision of its own.
 
 ## 5. Before tagging 0.1.0
 

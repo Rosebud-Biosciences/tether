@@ -569,6 +569,7 @@ class ObjectBackend(Protocol):
         return None
 
     def rename_pin(self, locator: Locator, old: Pin, state: State, new_id: str) -> Pin:
+        # Legacy, removed at 0.1.0: only the upgrade's ref renames call it
         """Give the pin ``old`` (which names ``state``) the id ``new_id``.
 
         Used by ``tether upgrade`` when the pin naming scheme changes. Default:
@@ -582,6 +583,7 @@ class ObjectBackend(Protocol):
         return new
 
     def rename_working_ref(self, locator: Locator, old: str, new: str) -> str:
+        # Legacy, removed at 0.1.0: only the upgrade's ref renames call it
         """Rename working branch ``old`` to ``new``; return the resulting ref.
 
         Used by ``tether upgrade`` when the branch naming scheme changes.

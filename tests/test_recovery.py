@@ -771,6 +771,7 @@ def test_recover_groups_refs_by_dataset_and_says_what_to_run(
                 "branches": [f"tether.ws.{old}.feat"],
             },
         ],
+        # Legacy, removed at 0.1.0: recover's `legacy` JSON key
         "legacy": [],
     }
 
@@ -867,6 +868,7 @@ def test_recover_suggests_nothing_while_a_store_cannot_be_listed(
 def test_recover_lists_legacy_and_unreadable_branches(
     vcs_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Legacy, removed at 0.1.0: the per-workspace half (keep the unreadable one)
     """Per-workspace branches named before bookmarks were dropped, so recover
     could say "no tether refs" while one held the only copy of uncommitted
     writes; refs named like tether's with no readable id were dropped too."""

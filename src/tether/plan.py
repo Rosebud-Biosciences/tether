@@ -26,6 +26,8 @@ no `preconditions`; format 2 (before 0.1.0b4) no `digest`, so its actions
 and context could be edited apart from the preconditions that vouch for
 them. Either is refused with "re-run the plan"."""
 
+# Legacy, removed at 0.1.0: the refusals of plan formats 1 and 2 (collapse
+# into `from_dict`'s generic "unsupported plan format")
 _UNBOUND_FORMATS = {
     1: "plan format 1 predates 0.1.0b1 and carries no preconditions",
     2: "plan format 2 predates 0.1.0b4 and carries no digest binding its actions "
@@ -39,6 +41,7 @@ PRECONDITION_KINDS = frozenset(
         "workspace_bookmark",
         "vcs_head",
         "history_digest",
+        # Legacy, removed at 0.1.0: only `upgrade` plans carry it
         "config_version",
         "ref_absent",
         "ref_head",
@@ -94,6 +97,8 @@ REQUIRED_ACTION_PRECONDITIONS: dict[str, dict[str, tuple[frozenset[str], ...]]] 
     "new": {
         "fork": (frozenset({"ref_head", "ref_absent"}),),
         "reuse": (frozenset({"ref_head"}),),
+        # Legacy, removed at 0.1.0: `ref_head` as the alternative, for adopts
+        # in plans saved by 0.1.0b5
         "adopt": (frozenset({"ref_present", "ref_head"}),),
     },
     "restore": {"fork": (frozenset({"ref_head", "ref_absent"}),)},
@@ -302,6 +307,7 @@ class Plan:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Plan:
         fmt = int(data.get("format", PLAN_FORMAT))
+        # Legacy, removed at 0.1.0: the format 1 and 2 refusal
         if fmt in _UNBOUND_FORMATS:
             raise StalePlanError(f"{_UNBOUND_FORMATS[fmt]}; re-run the plan")
         if fmt != PLAN_FORMAT:

@@ -252,11 +252,12 @@ def test_saved_drop_plan_applies_only_in_the_checkout_that_made_it(
     assert fork not in default_store().system(system).branches
 
 
-def test_a_drop_plan_from_before_the_binding_is_bound_by_its_context(
+def test_a_drop_plan_without_the_workspace_binding_is_refused(
     vcs_root: Path, tmp_path: Path
 ) -> None:
     """Plans saved by 0.1.0b3 carry the workspace id in their context but not
-    as a precondition; apply compares it anyway."""
+    as a precondition. They are plan format 2, refused at load; a format 3
+    plan without the binding is refused as lacking it, in any checkout."""
     repo, _system = _baseline(vcs_root)
     commit, _fork, _pin = _probe(repo)
     repo.new("main")
@@ -265,8 +266,13 @@ def test_a_drop_plan_from_before_the_binding_is_bound_by_its_context(
         p for p in old["preconditions"] if p["kind"] != "workspace_id"
     ]
     other = _other_checkout(repo, vcs_root, tmp_path)
-    with pytest.raises(StalePlanError, match="made in another checkout"):
-        other.apply_drop(Plan.from_dict(old))
+    for where in (repo, other):
+        with pytest.raises(StalePlanError, match="predates the workspace_id"):
+            where.apply_drop(Plan.from_dict(old))
+    # Legacy, removed at 0.1.0: the format 2 refusal of a 0.1.0b3-shaped plan
+    b3 = {k: v for k, v in old.items() if k != "digest"} | {"format": 2}
+    with pytest.raises(StalePlanError, match=r"format 2 predates 0\.1\.0b4"):
+        Plan.from_dict(b3)
     assert "probe" in repo.vcs.bookmarks() and commit in repo.vcs.history_revs()
 
 

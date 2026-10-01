@@ -444,6 +444,7 @@ class GcOps(RepoCore):
         ``force``.
         """
         keep_slugs = {bookmark_slug(b) for b in keep_bookmarks}
+        # Legacy, removed at 0.1.0: live workspaces, for per-workspace branches
         live_ws = {w[:8] for w in self.live_workspace_ids()}
         in_use = {
             ref
@@ -509,6 +510,7 @@ class GcOps(RepoCore):
                     foreign += 1  # another dataset's branch; not ours to judge
                     continue
                 slug = working_ref_bookmark(ref)
+                # Legacy, removed at 0.1.0: a per-workspace branch's workspace
                 legacy_ws = working_ref_workspace(ref)
                 if ref in in_use:
                     continue
@@ -521,6 +523,7 @@ class GcOps(RepoCore):
                         continue
                 elif slug is not None:
                     origin = f"bookmark {slug} (gone)"
+                # Legacy, removed at 0.1.0: the per-workspace branch verdicts
                 elif legacy_ws in live_ws:
                     continue
                 else:

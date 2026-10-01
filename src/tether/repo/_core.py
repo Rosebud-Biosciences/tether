@@ -97,6 +97,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from tether.experimental.lifecycle import CreatedStore
     from tether.experimental.registry import ExportBundle, ImportReport, ImportSpec
     from tether.repo import Repo
+
+    # Legacy, removed at 0.1.0: the upgrade delegates' return type
     from tether.upgrade import UpgradeReport
 
 TETHER_REV_ENV = "TETHER_REV"
@@ -253,6 +255,7 @@ class RepoCore:
         config: RepoConfig,
         vcs: VcsAdapter,
         *,
+        # Legacy, removed at 0.1.0: lets `upgrade` open an older dataset
         allow_outdated: bool = False,
     ) -> None:
         if config.version > CONFIG_VERSION:
@@ -260,6 +263,8 @@ class RepoCore:
                 f"tether.toml is version {config.version}, newer than this tether "
                 f"understands ({CONFIG_VERSION}); upgrade tether-vcs"
             )
+        # Legacy, removed at 0.1.0: `allow_outdated`, and `tether.upgrade`'s
+        # message (inline it, naming the last beta)
         if config.version < CONFIG_VERSION and not allow_outdated:
             from tether.upgrade import outdated_message
 
@@ -618,6 +623,7 @@ class RepoCore:
         vcs.bookmark_set(trunk, "@")
         return trunk
 
+    # Legacy, removed at 0.1.0: the `allow_outdated` argument (and its docs)
     @classmethod
     def find(cls, path: Path | str = ".", *, allow_outdated: bool = False) -> Self:
         """Open the dataset whose `tether.toml` is at or above `path`.
@@ -1149,6 +1155,8 @@ class RepoCore:
         return read_pinned(self.vcs.shared_dir(), self.config.dataset_id)
 
     def _seed_pinned(self) -> None:
+        # Legacy, removed at 0.1.0: seeding the pin index from the op logs, for
+        # clones from before it (or move it into the last beta's upgrade)
         """Replay every live checkout's op log, oldest entry first: a pin
         this clone created is added, and one its `gc` released is taken off.
 
@@ -1731,14 +1739,7 @@ class RepoCore:
         if not verify:
             return
         # A plan supplies its own preconditions. Before trusting the list,
-        # hold it to what the command requires -- and check the checkout the
-        # plan's context names even when the list omits it (plans saved by
-        # 0.1.0b3 record the id without requiring it).
-        if plan.context.get("workspace_id") not in (None, self.workspace.workspace_id):
-            raise StalePlanError(
-                f"this {command} plan was made in another checkout; re-run the "
-                "plan here"
-            )
+        # hold it to what the command requires.
         missing = plan.missing_preconditions()
         if missing:
             raise StalePlanError(
@@ -1806,6 +1807,7 @@ class RepoCore:
             observed = self.vcs.history_digest()
             if observed != pre.expected:
                 fail(observed)
+        # Legacy, removed at 0.1.0: only `upgrade` plans carry it
         elif kind == "config_version":
             if self.config.version != pre.expected:
                 fail(self.config.version)
@@ -1989,6 +1991,7 @@ class RepoCore:
 
     # -- upgrade --------------------------------------------------------------- #
     # -- upgrade (tether.upgrade; removed at 0.1.0) ---------------------------- #
+    # Legacy, removed at 0.1.0: the three upgrade delegates below
     # Thin delegates: the alpha-format migration lives under `tether.upgrade`
     # and is imported on first use. See that package's docstring for the
     # removal contract.

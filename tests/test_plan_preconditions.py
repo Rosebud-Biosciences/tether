@@ -51,6 +51,8 @@ def test_plan_round_trips_preconditions_and_refuses_format_1() -> None:
         plan.require("not-a-kind")
     with pytest.raises(ConfigError, match="unknown plan precondition"):
         Precondition.from_dict({"kind": "nope"})
+    # Legacy, removed at 0.1.0: the format 1 and 2 refusals (format 1 and 2
+    # then fall under "unsupported plan format", as 99 does below)
     # A plan saved before 0.1.0b1 carries no preconditions, one saved before
     # 0.1.0b4 no digest: refused, re-plan.
     data["format"] = 1
@@ -112,6 +114,7 @@ def test_every_command_plan_carries_its_preconditions(vcs_root: Path) -> None:
         "workspace_bookmark",
         "workspace_id",
     ]
+    # Legacy, removed at 0.1.0: the upgrade plan's precondition
     assert kinds(repo.plan_upgrade()) == ["config_version"]
     # Every plan carries what its command requires (nothing is "missing").
     for plan in (repo.plan_commit("m"), repo.plan_gc(), new, promote, restore):
@@ -342,8 +345,7 @@ def test_verify_plan_checks_each_kind(
 def test_a_plan_missing_a_required_precondition_is_refused(vcs_root: Path) -> None:
     """A plan supplies its own preconditions, so one saved by an older tether
     (or edited) could apply anywhere. Every command has a required set, per
-    action for the per-object kinds; a plan short of it is stale, and the
-    checkout its context names is checked even when the list omits it."""
+    action for the per-object kinds; a plan short of it is stale."""
     repo = Repo.init(vcs_root)
     _mem(repo)
     plan = repo.plan_commit("m")
@@ -368,13 +370,14 @@ def test_a_plan_missing_a_required_precondition_is_refused(vcs_root: Path) -> No
         repo.apply_new(stripped)
     assert "work" not in repo.vcs.bookmarks()
 
-    # The context's workspace id binds even a plan that does not require it.
+    # A plan without its workspace binding is refused as lacking it, whatever
+    # checkout its context names.
     gc = repo.plan_gc().to_dict()
     gc["preconditions"] = [
         p for p in gc["preconditions"] if p["kind"] != "workspace_id"
     ]
     gc["context"]["workspace_id"] = "0" * 32
-    with pytest.raises(StalePlanError, match="made in another checkout"):
+    with pytest.raises(StalePlanError, match="predates the workspace_id"):
         repo.apply_gc(Plan.from_dict(gc))
     # `verify=False` (plan and apply in one call) skips the requirement.
     repo.apply_commit(old, verify=False)

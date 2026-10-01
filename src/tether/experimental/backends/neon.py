@@ -543,12 +543,14 @@ class NeonBackend(ObjectBackend):
         return name
 
     def _rename_branch(self, project_id: str, old: str, new: str) -> None:
+        # Legacy, removed at 0.1.0: only the two renames below call it
         br = self._require_branch(project_id, old)
         self._api.patch(
             f"/projects/{project_id}/branches/{br['id']}", {"branch": {"name": new}}
         )
 
     def rename_pin(self, locator: Locator, old: Pin, state: State, new_id: str) -> Pin:
+        # Legacy, removed at 0.1.0: the upgrade's in-place pin rename
         # A pin is a branch; working branches forked from it are its children,
         # so pin-then-unpin would fail. Rename in place.
         project_id = self._project(locator)
@@ -560,6 +562,7 @@ class NeonBackend(ObjectBackend):
         return Pin(id=new_id, ref=new_ref)
 
     def rename_working_ref(self, locator: Locator, old: str, new: str) -> str:
+        # Legacy, removed at 0.1.0: the upgrade's in-place branch rename
         self._rename_branch(self._project(locator), old, new)
         return new
 

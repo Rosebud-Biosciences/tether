@@ -369,6 +369,7 @@ class RecoveredRefs:
     bookmarks: dict[str, list[str]] = field(default_factory=dict)
     """Bookmark, as its ref names it (`bookmark_slug`) -> its working
     branches, lowest generation first: the last is what `new --adopt` takes."""
+    # Legacy, removed at 0.1.0: recover's per-workspace branches
     legacy: dict[str, list[str]] = field(default_factory=dict)
     """Workspace id -> its per-workspace working branches, named before
     bookmarks (`tether.ws.<dataset>.<workspace>.<key>`): `new --adopt` does
@@ -380,6 +381,7 @@ class RecoveredRefs:
             mine = self.bookmarks.setdefault(slug, [])
             mine.extend(r for r in refs if r not in mine)
             mine.sort(key=lambda ref: working_ref_generation(ref) or 1)
+        # Legacy, removed at 0.1.0: merging per-workspace branches
         for ws, refs in other.legacy.items():
             mine = self.legacy.setdefault(ws, [])
             mine.extend(r for r in refs if r not in mine)
@@ -399,6 +401,7 @@ class RecoveredRefs:
                 }
                 for slug, refs in sorted(self.bookmarks.items())
             ],
+            # Legacy, removed at 0.1.0: recover's `legacy` JSON key
             "legacy": [
                 {"workspace": ws, "branches": list(refs)}
                 for ws, refs in sorted(self.legacy.items())

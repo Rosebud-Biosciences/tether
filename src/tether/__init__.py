@@ -55,6 +55,7 @@ from tether.manifest import (
     ref_for_pin,
     working_ref_bookmark,
     working_ref_name,
+    # Legacy, removed at 0.1.0: per-workspace ref parsing
     working_ref_workspace,
 )
 from tether.oplog import OpEntry
@@ -123,6 +124,7 @@ __all__ = [
     "TetherError",
     "UndoReport",
     "UnpinnedStateError",
+    # Legacy, removed at 0.1.0: the upgrade's report
     "UpgradeReport",
     "VcsDrift",
     "VcsError",
@@ -140,6 +142,7 @@ __all__ = [
     "vcs",
     "working_ref_bookmark",
     "working_ref_name",
+    # Legacy, removed at 0.1.0: per-workspace ref parsing
     "working_ref_workspace",
 ]
 
@@ -149,6 +152,7 @@ __all__ = [
 # `tether` -- that is the stable surface -- but are resolved on first access,
 # so `import tether` loads none of it.
 _LAZY_EXPORTS = {
+    # Legacy, removed at 0.1.0: the upgrade's report
     "UpgradeReport": "tether.upgrade",
     "ExportBundle": "tether.experimental.registry",
     "ImportReport": "tether.experimental.registry",

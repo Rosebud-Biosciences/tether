@@ -1168,6 +1168,7 @@ def test_add_takes_the_key_from_a_lone_locator(
         ["restore", "db", "--from", "@"],
         ["forget-workspace"],
         ["drop", "probe"],
+        # Legacy, removed at 0.1.0: the `upgrade` command
         ["upgrade"],
         ["gc"],
         ["promote"],
