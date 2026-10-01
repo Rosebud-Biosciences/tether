@@ -78,7 +78,10 @@ in [Writing a Backend](11-extending.qmd#capabilities-decide-behavior).
 (Icechunk `reset_branch`, Iceberg `set-snapshot-ref`, git `update-ref` or
 `merge --ff-only`, Dolt merges). `MERGE` three-way merges a diverged fork
 (git `merge`, `DOLT_MERGE`). Lance cannot move a branch head yet, and Neon
-cannot promote a child branch, so both are refused with instructions.
+cannot promote a child branch, so both are refused with instructions. Where
+Icechunk and Lance stand upstream on branch merge, and what blocks it, is a
+dated survey in
+[`docs/upstream-branch-merge.md`](https://github.com/elyall/tether/blob/main/docs/upstream-branch-merge.md).
 
 **`CONDITIONAL_REF`** means a fork, promote or merge moves the ref only
 from the head the plan reviewed, in one atomic step. The others compare
