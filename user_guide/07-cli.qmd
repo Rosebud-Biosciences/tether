@@ -504,16 +504,24 @@ prints the next steps, each a command with its values quoted for the shell
   every object under the current one, after which it can no longer change.
   The last step is then `tether recover` without keys;
 - `tether commit` on the trunk;
-- `tether new BOOKMARK --adopt` and `tether commit`, per bookmark: the VCS
-  bookmark whose escaped name (`feat/x` is `feat-x-1a2b3c` in a branch
-  name) the branch carries, or `-b BOOKMARK TRUNK` to make one. An escaped
-  name no bookmark matches cannot be turned back into the original, so it
-  is taken under the escaped one;
-- `tether restore KEY --at REF` (on a bookmark) per *legacy* branch: a
-  per-workspace branch `tether.ws.<id>.<workspace>.<key>` from before
-  bookmarks, listed under its workspace id, which may hold writes nobody
-  committed. Objects sharing a branch space are named together.
+- `tether new --adopt -- BOOKMARK` and `tether commit`, per bookmark: the
+  VCS bookmark whose escaped name (`feat/x` is `feat-x-1a2b3c` in a branch
+  name) the branch carries, or `new -b BOOKMARK --adopt -- TRUNK` to make
+  one. An escaped name no bookmark matches cannot be turned back into the
+  original, so it is taken under the escaped one;
+- per *legacy* branch, `tether new -b recover-<workspace> -- TRUNK` (`tether
+  new -- recover-<workspace>` once that exists), `tether restore --at REF --
+  KEY...` and `tether commit`: a per-workspace branch
+  `tether.ws.<id>.<workspace>.<key>` from before bookmarks, listed under its
+  workspace id, which may hold writes nobody committed. `restore` refuses
+  the trunk, so its copy goes onto one bookmark per workspace. Objects
+  sharing a branch space are named together. Each step commits its copy:
+  the next step's `new` would reset a restore not yet committed.
   <!-- Legacy, removed at 0.1.0: recover's legacy-branch step -->
+
+Each command ends its options with `--` before its keys and bookmark
+names, which may start with `-` (`tether restore --help` is the help flag,
+however it is quoted).
 
 Refs named like tether's that carry no readable dataset id are listed too.
 It writes nothing, and exits 1 when a store could not be listed. The whole

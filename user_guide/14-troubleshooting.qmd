@@ -127,9 +127,9 @@ reset a branch in place. A new dataset under the old id takes them back:
    next steps:
      1. tether commit -m 'Recover main'
         # pins each object's upstream branch on the trunk (main); a state pinned before reuses its tag
-     2. tether new -b relabel main --adopt && tether commit -m 'Recover relabel'
+     2. tether new -b relabel --adopt -- main && tether commit -m 'Recover relabel'
         # bookmark relabel, made afresh off the trunk: takes its branches as they are, uncommitted writes included, and pins them
-     3. tether new -b sweep main --adopt && tether commit -m 'Recover sweep'
+     3. tether new -b sweep --adopt -- main && tether commit -m 'Recover sweep'
         # bookmark sweep, made afresh off the trunk: takes its branches as they are, uncommitted writes included, and pins them
    ```
 
@@ -157,7 +157,7 @@ reset a branch in place. A new dataset under the old id takes them back:
    branch. A state the old dataset pinned gets the same pin id, so its tag
    is reused and no new tag is made.
 
-5. **Adopt each bookmark, and commit.** `tether new -b NAME main --adopt`
+5. **Adopt each bookmark, and commit.** `tether new -b NAME --adopt -- main`
    takes the bookmark's branch as its working ref as it is: no reset, no
    copy, and writes nobody committed stay. `status` shows them as
    `modified`, and `tether commit` pins them. An object whose store has no
@@ -165,19 +165,30 @@ reset a branch in place. A new dataset under the old id takes them back:
    bookmark whose name had `/`, `.` or a space is listed as its branch
    spells it (`feat-x-1a2b3c` for `feat/x`), and either name finds the
    branch. Where the VCS still has the bookmark, `recover` suggests `tether
-   new feat/x --adopt`. Where it does not, the original name cannot be read
-   back from the branch: `recover` suggests `tether new -b feat-x-1a2b3c
-   main --adopt`, which takes the branch under the escaped name.
+   new --adopt -- feat/x`. Where it does not, the original name cannot be
+   read back from the branch: `recover` suggests `tether new -b
+   feat-x-1a2b3c --adopt -- main`, which takes the branch under the escaped
+   name. Every suggested command ends its options with `--`, since a key or
+   a git branch name may start with `-`.
 
 6. **Copy legacy branches.** Datasets from before bookmarks named working
    branches per workspace, `tether.ws.<id>.<workspace>.<key>`. `recover`
    lists them under their dataset id as legacy branches of workspace
    `<workspace>`, since one may hold the only copy of writes nobody
-   committed. `new --adopt` does not take them. On a bookmark, `tether
-   restore KEY --at REF` copies one onto the bookmark's branch, and `tether
-   commit` pins it. Objects that share a branch space, such as two Neon
-   databases on one branch, are restored together: `recover` names them in
-   one `tether restore KEY1 KEY2 --at REF`.
+   committed. `new --adopt` does not take them, and `restore` refuses the
+   trunk, so each step first moves to a bookmark `recover-<workspace>`,
+   made off the trunk by the workspace's first step and joined by the rest.
+   Then `tether
+   restore --at REF -- KEY` copies the branch onto the bookmark's branch,
+   and `tether commit` pins it before the next step's `new`, which would
+   reset it otherwise. Objects that share a branch space, such as two Neon
+   databases on one branch, are restored together in one `tether restore
+   --at REF -- KEY1 KEY2`:
+
+   ```
+     2. tether new -b recover-ab12cd34 -- main && tether restore --at tether.ws.0a1b2c3d.ab12cd34.imaging-3f2a1b -- imaging && tether commit -m 'Recover tether.ws.0a1b2c3d.ab12cd34.imaging-3f2a1b'
+        # tether.ws.0a1b2c3d.ab12cd34.imaging-3f2a1b is a legacy branch of workspace ab12cd34 (named before bookmarks) and may hold writes no commit pins: this copies it onto bookmark recover-ab12cd34 and pins it
+   ```
    <!-- Legacy, removed at 0.1.0: recover's legacy-branch step (renumber the list) -->
 
 The VCS history is lost for good: the commit messages, and which states

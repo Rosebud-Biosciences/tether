@@ -13,7 +13,7 @@ import pytest
 
 from tether.backends.memory import default_store
 from tether.errors import ConfigError, StalePlanError, TetherError
-from tether.manifest import RepoConfig, bookmark_slug, read_config
+from tether.manifest import RepoConfig, bookmark_slug, read_config, working_ref_name
 from tether.plan import Plan
 from tether.repo import Repo
 
@@ -125,6 +125,28 @@ def _ic_read(uri: str, ref: str) -> int:
         session = repo.readonly_session(tag=ref)
     attrs: Any = zarr.open_group(store=session.store, mode="r").attrs
     return int(attrs["v"])
+
+
+def _commands(command: str) -> list[list[str]]:
+    """A step's command as the argv of each `&&`-chained `tether` command."""
+    import shlex
+
+    argvs: list[list[str]] = [[]]
+    for word in shlex.split(command):
+        if word == "&&":
+            argvs.append([])
+        else:
+            argvs[-1].append(word)
+    return argvs
+
+
+def _run(steps: list[Any]) -> None:
+    """Run every step's command, in order, through the CLI."""
+    for step in steps:
+        for argv in _commands(step.command) if step.command else []:
+            assert argv[0] == "tether", argv
+            r = runner.invoke(app, argv[1:])
+            assert r.exit_code == 0, (argv, r.output)
 
 
 def _ic_refs(uri: str, *, but: str = "") -> dict[str, str]:
@@ -790,8 +812,8 @@ def test_recover_groups_refs_by_dataset_and_says_what_to_run(
     assert [s.command for s in report.steps] == [
         None,
         "tether commit -m 'Recover main'",
-        "tether new -b exp main --adopt && tether commit -m 'Recover exp'",
-        "tether new -b feat main --adopt && tether commit -m 'Recover feat'",
+        "tether new -b exp --adopt -- main && tether commit -m 'Recover exp'",
+        "tether new -b feat --adopt -- main && tether commit -m 'Recover feat'",
     ]
     assert report.steps[0].note == (
         "set this dataset's id in tether.toml (nothing is pinned under "
@@ -871,7 +893,7 @@ def test_cli_recover(
     assert "(this dataset)" not in r.stdout
     assert f'     # id = "{old}"' in r.stdout
     assert "  2. tether commit -m 'Recover main'\n     # pins each" in r.stdout
-    assert "tether new -b feat main --adopt" in r.stdout
+    assert "tether new -b feat --adopt -- main" in r.stdout
 
     r = runner.invoke(app, ["recover", "--json"])
     assert r.exit_code == 0, r.output
@@ -968,13 +990,14 @@ def test_recover_lists_legacy_and_unreadable_branches(
     steps = repo.recover_report().steps
     assert [s.command for s in steps] == [
         "tether commit -m 'Recover main'",
-        f"tether restore db --at {legacy}",
+        f"tether new -b recover-ab12cd34 -- main && tether restore --at {legacy} "
+        f"-- db && tether commit -m 'Recover {legacy}'",
         None,
     ]
     assert steps[1].note == (
         f"{legacy} is a legacy branch of workspace ab12cd34 (named before "
-        "bookmarks) and may hold writes no commit pins: on a bookmark, this "
-        "copies it"
+        "bookmarks) and may hold writes no commit pins: this copies it onto "
+        "bookmark recover-ab12cd34 and pins it"
     )
     assert steps[2].note.startswith("tether.ws.not-a-dataset look like tether's")
     (row,) = repo.recover_report(["odd"]).objects
@@ -991,12 +1014,13 @@ def test_recover_lists_legacy_and_unreadable_branches(
     assert "no dataset id: tether.ws.not-a-dataset" in r.stdout
     assert "no tether refs" not in r.stdout
 
-    # The step does what it says.
-    repo.commit("Recover main")
-    repo.new(bookmark="feat")
-    repo.restore(["db"], at=legacy)
+    # The steps do what they say, from the trunk.
+    _run(steps)
+    repo = Repo.find(vcs_root)
+    assert repo.workspace.bookmark == "recover-ab12cd34"
     wref = repo.workspace.working_refs["db"]
     assert store.system(system).branches[wref] == head
+    assert repo.objects["db"].state == {"snapshot_id": head}
 
 
 def test_a_scoped_recover_advises_no_dataset_id(
@@ -1129,7 +1153,7 @@ def test_recover_matches_escaped_bookmark_names(
 
     commands = [s.command or "" for s in repo.recover_report().steps]
     assert (
-        "tether new feature/x --adopt && tether commit -m 'Recover feature/x'"
+        "tether new --adopt -- feature/x && tether commit -m 'Recover feature/x'"
         in commands
     )
     assert not any(f"-b {slug}" in c for c in commands)
@@ -1141,7 +1165,7 @@ def test_recover_matches_escaped_bookmark_names(
     (step,) = [s for s in fresh.recover_report().steps if slug in s.note]
     assert "the original name cannot be recovered from the branch" in step.note
     assert step.command == (
-        f"tether new -b {slug} main --adopt && tether commit -m 'Recover {slug}'"
+        f"tether new -b {slug} --adopt -- main && tether commit -m 'Recover {slug}'"
     )
     fresh.commit("Recover main")
     fresh.new("main", bookmark=slug, adopt=True)
@@ -1223,8 +1247,6 @@ def test_recover_quotes_its_commands_and_restores_a_branch_space_together(
     Neon branch) got a `restore --at` per key, each of which `restore`
     refuses. One command per branch space and ref, every value quoted: it
     parses back into the intended argv, and running it restores both."""
-    import shlex
-
     monkeypatch.chdir(vcs_root)
     repo = Repo.init(vcs_root)
     shared = _mem(repo, key)
@@ -1241,27 +1263,29 @@ def test_recover_quotes_its_commands_and_restores_a_branch_space_together(
     restores = {
         s.command: s.note for s in steps if s.command and " restore " in s.command
     }
-    argvs = sorted(shlex.split(c) for c in restores)
-    assert argvs == sorted(
+    refs = {(key, f"{key}/2"): shared_ref, ("alone",): alone_ref}
+    assert [_commands(c) for c in restores] == [
         [
-            ["tether", "restore", key, f"{key}/2", "--at", shared_ref],
-            ["tether", "restore", "alone", "--at", alone_ref],
+            ["tether", "new", "-b", "recover-ab12cd34", "--", "main"]
+            if n == 0
+            else ["tether", "new", "--", "recover-ab12cd34"],
+            ["tether", "restore", "--at", refs[keys], "--", *keys],
+            ["tether", "commit", "-m", f"Recover {refs[keys]}"],
         ]
-    )
+        for n, keys in enumerate(sorted(refs))
+    ]
     together = "share its branch space, so they are restored together"
     assert [together in note for note in restores.values()].count(True) == 1
-    (commit,) = [s.command for s in steps if s.command and "commit" in s.command]
-    assert shlex.split(commit) == ["tether", "commit", "-m", "Recover main"]
+    (commit,) = [s.command for s in steps if s.command and "Recover main" in s.command]
+    assert _commands(commit) == [["tether", "commit", "-m", "Recover main"]]
 
-    repo.commit("Recover main")
-    repo.new(bookmark="feat")
-    for argv in argvs:
-        r = runner.invoke(app, argv[1:])
-        assert r.exit_code == 0, (argv, r.output)
-    refs = Repo.find(vcs_root).workspace.working_refs
-    assert refs[key] == refs[f"{key}/2"]
-    assert store.resolve(shared, refs[key]) == shared_head
-    assert store.resolve(alone, refs["alone"]) == alone_head
+    _run(steps)
+    repo = Repo.find(vcs_root)
+    working = repo.workspace.working_refs
+    assert working[key] == working[f"{key}/2"]
+    assert store.resolve(shared, working[key]) == shared_head
+    assert store.resolve(alone, working["alone"]) == alone_head
+    assert repo.objects[key].state == {"snapshot_id": shared_head}
 
 
 def test_recover_quotes_bookmark_names_and_messages(
@@ -1285,9 +1309,160 @@ def test_recover_quotes_bookmark_names_and_messages(
         if s.command and "--adopt" in s.command
     ]
     assert shlex.split(command) == [
-        "tether", "new", name, "--adopt", "&&",
+        "tether", "new", "--adopt", "--", name, "&&",
         "tether", "commit", "-m", f"Recover {name}",
     ]  # fmt: skip
+
+
+@pytest.mark.parametrize("rerun", [False, True])
+def test_recover_takes_legacy_branches_back_from_the_trunk(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch, rerun: bool
+) -> None:
+    # Legacy, removed at 0.1.0: recovering per-workspace branches
+    """The legacy steps committed on the trunk, then suggested a `restore
+    --at`, which `restore` refuses on the trunk. Each starts from a bookmark
+    `recover-<workspace>` off the trunk -- made by the first of its
+    workspace's steps, joined by the rest -- and commits what it restored,
+    so the next step's `new` keeps it. Run as printed from the trunk, they
+    leave each legacy branch's writes pinned on its bookmark's branch; run
+    again after a partial run, they join the bookmark it made."""
+    monkeypatch.chdir(vcs_root)
+    repo = Repo.init(vcs_root)
+    systems = {"db": _mem(repo), "s": _mem(repo, "s/1")}
+    _mem(repo, "s/2", system=systems["s"])
+    store = default_store()
+    ds = repo.config.dataset_id
+    first, second = "ab12cd34", "ef567890"
+    legacy = {
+        (ws, space): f"tether.ws.{ds}.{ws}.{space}-0a1b2c"
+        for ws, space in ((first, "db"), (first, "s"), (second, "db"))
+    }
+    heads = {
+        (ws, space): store.write(systems[space], ref, {"legacy": f"{ws} {space}"})
+        for (ws, space), ref in legacy.items()
+    }
+
+    def legacy_step(ws: str, space: str, *, made: bool) -> list[list[str]]:
+        bookmark, ref = f"recover-{ws}", legacy[ws, space]
+        return [
+            ["tether", "new", "--", bookmark]
+            if made
+            else ["tether", "new", "-b", bookmark, "--", "main"],
+            ["tether", "restore", "--at", ref, "--"]
+            + (["db"] if space == "db" else ["s/1", "s/2"]),
+            ["tether", "commit", "-m", f"Recover {ref}"],
+        ]
+
+    assert repo.on_trunk()
+    steps = repo.recover_report().steps
+    assert [_commands(s.command) for s in steps if s.command] == [
+        [["tether", "commit", "-m", "Recover main"]],
+        legacy_step(first, "db", made=False),
+        legacy_step(second, "db", made=False),
+        legacy_step(first, "s", made=True),
+    ]
+    if rerun:
+        _run(steps[:2])
+        steps = Repo.find(vcs_root).recover_report().steps
+        assert [_commands(s.command) for s in steps if s.command][-3:] == [
+            legacy_step(first, "db", made=True),
+            legacy_step(second, "db", made=False),
+            legacy_step(first, "s", made=True),
+        ]
+    _run(steps)
+
+    repo = Repo.find(vcs_root)
+    marks = repo.vcs.bookmarks()
+    for ws, spaces in ((first, ["db", "s"]), (second, ["db"])):
+        branch = working_ref_name(ds, f"recover-{ws}")
+        committed = repo._objects_at(marks[f"recover-{ws}"])
+        for space in spaces:
+            assert store.system(systems[space]).branches[branch] == heads[ws, space]
+            for key in ["db"] if space == "db" else ["s/1", "s/2"]:
+                assert committed[key].state == {"snapshot_id": heads[ws, space]}
+    for (ws, space), ref in legacy.items():
+        assert store.system(systems[space]).branches[ref] == heads[ws, space]
+
+
+@pytest.mark.parametrize("key", ["--help", "-x", "-", "two words"])
+def test_recover_ends_options_before_keys_that_start_with_a_dash(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    """A key may start with `-`, and in `tether restore --help --at REF` it
+    is the help flag however it is quoted. Every command ends its options
+    with `--` before the keys: each parses back into the intended argv, and
+    runs."""
+    monkeypatch.chdir(vcs_root)
+    repo = Repo.init(vcs_root)
+    system = _mem(repo, key)
+    _mem(repo, f"{key}/2", system=system)
+    repo.commit("baseline")
+    store = default_store()
+    pins = [repo.objects[k].pin for k in (key, f"{key}/2")]
+    for pin in pins:
+        assert pin is not None
+        store.system(system).tags.pop(pin.ref, None)
+    ref = f"tether.ws.{repo.config.dataset_id}.ab12cd34.k-0a1b2c"
+    head = store.write(system, ref, {"uncommitted": 1})
+
+    steps = repo.recover_report().steps
+    assert [_commands(s.command) for s in steps if s.command] == [
+        [["tether", "repair", "--", key, f"{key}/2"]],
+        [["tether", "commit", "-m", "Recover main"]],
+        [
+            ["tether", "new", "-b", "recover-ab12cd34", "--", "main"],
+            ["tether", "restore", "--at", ref, "--", key, f"{key}/2"],
+            ["tether", "commit", "-m", f"Recover {ref}"],
+        ],
+    ]
+    _run(steps)
+    repo = Repo.find(vcs_root)
+    assert all(p is not None and p.ref in store.system(system).tags for p in pins)
+    working = repo.workspace.working_refs
+    assert working[key] == working[f"{key}/2"]
+    assert store.resolve(system, working[key]) == head
+    assert repo.objects[key].state == {"snapshot_id": head}
+
+
+def test_recover_ends_options_before_a_bookmark_that_starts_with_a_dash(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """git keeps a branch whose name starts with `-` (`git update-ref` makes
+    one; `git branch` refuses), which `tether new NAME --adopt` read as
+    options; jj quotes such a name (`"-feat"`). The name comes after `--`,
+    where the CLI reads it as the revision."""
+    monkeypatch.chdir(vcs_root)
+    repo = Repo.init(vcs_root)
+    system = _mem(repo)
+    repo.commit("baseline")
+    if repo.vcs.kind == "git":
+        name = "-feat"
+        make = ["git", "update-ref", f"refs/heads/{name}", "HEAD"]
+    else:
+        name = '"-feat"'
+        make = ["jj", "bookmark", "create", "-r", "@-", name]
+    subprocess.run(make, cwd=vcs_root, check=True, capture_output=True)
+    assert name in repo.vcs.bookmarks()
+    wref = working_ref_name(repo.config.dataset_id, name)
+    default_store().write(system, wref, {"uncommitted": 1})
+
+    (command,) = [
+        s.command
+        for s in repo.recover_report().steps
+        if s.command and "--adopt" in s.command
+    ]
+    assert _commands(command) == [
+        ["tether", "new", "--adopt", "--", name],
+        ["tether", "commit", "-m", f"Recover {name}"],
+    ]
+    r = runner.invoke(app, ["new", "--adopt", "--dry-run", "--", name])
+    if repo.vcs.kind == "jj":
+        assert r.exit_code == 0 and wref in r.stdout, r.output
+        return
+    assert runner.invoke(app, ["new", name, "--adopt", "--dry-run"]).exit_code == 2
+    # Past the CLI, git's own `rev-parse` reads the name as an option.
+    assert r.exit_code == 1, r.output
+    assert f"could not resolve revision: {name}" in r.output
 
 
 # --------------------------------------------------------------------------- #
@@ -1372,7 +1547,7 @@ def test_recover_a_lost_dataset_end_to_end(
     assert [b["bookmark"] for b in found["bookmarks"]] == ["feat"]
     assert [step["command"] for step in payload["steps"]] == [
         "tether commit -m 'Recover main'",
-        "tether new -b feat main --adopt && tether commit -m 'Recover feat'",
+        "tether new -b feat --adopt -- main && tether commit -m 'Recover feat'",
     ]
 
     # The trunk re-commits the state it pinned: the tag is reused, none made.

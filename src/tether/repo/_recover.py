@@ -54,10 +54,12 @@ class RecoverOps(RepoCore):
         to set in `tether.toml` when the refs are another dataset's and
         nothing is pinned under this one yet; a `commit` on the trunk, which
         re-pins each upstream branch (a state pinned before reuses its tag);
-        then per bookmark `new BOOKMARK --adopt` (`new -b BOOKMARK TRUNK
-        --adopt` where the VCS has no such bookmark) and a `commit`; and per
-        legacy branch a `restore --at` that copies it, naming every object
-        of a branch space together.
+        then per bookmark `new --adopt -- BOOKMARK` (`new -b BOOKMARK --adopt
+        -- TRUNK` where the VCS has no such bookmark) and a `commit`; and per
+        legacy branch, on a bookmark `recover-<workspace>` off the trunk, a
+        `restore --at` that copies it, naming every object of a branch space
+        together, and a `commit`. Each command ends its options with `--`:
+        a key, and a git branch name, may start with `-`.
 
         Args:
             keys: Only these objects (keys, or prefixes ending in `/`; see
@@ -183,7 +185,7 @@ class RecoverOps(RepoCore):
                     f"{', '.join(unrecognized)} look like tether's but carry no "
                     "dataset id it can read, so no step here takes them back: look "
                     "at them before pinning afresh; on a bookmark, `tether restore "
-                    "KEY --at REF` copies a branch",
+                    "--at REF -- KEY` copies a branch",
                 )
             )
         if report.scoped:
@@ -235,7 +237,7 @@ class RecoverOps(RepoCore):
         found = report.datasets
         current, trunk = report.dataset_id, report.trunk
         recommit = (
-            "" if self.workspace.bookmark == trunk else f"tether new {q(trunk)} && "
+            "" if self.workspace.bookmark == trunk else f"tether new -- {q(trunk)} && "
         ) + f"tether commit -m {q(f'Recover {trunk}')}"
         if not found:
             if any(o.unrecognized or o.missing_pin for o in report.objects):
@@ -294,13 +296,14 @@ class RecoverOps(RepoCore):
                 RecoverStep(
                     "tether recover",
                     "with the id set, the steps that take back its bookmarks: "
-                    f"`tether new -b BOOKMARK {q(trunk)} --adopt`, then `tether "
+                    f"`tether new -b BOOKMARK --adopt -- {q(trunk)}`, then `tether "
                     "commit`, for each",
                 )
             )
             return steps
+        known = list(self.vcs.bookmarks())
         by_slug: dict[str, list[str]] = {}
-        for name in self.vcs.bookmarks():
+        for name in known:
             by_slug.setdefault(bookmark_slug(name), []).append(name)
         adopts = (
             "takes its branches as they are, uncommitted writes included, and pins them"
@@ -312,8 +315,8 @@ class RecoverOps(RepoCore):
                     RecoverStep(
                         None,
                         f"{branch} is named for the trunk, whose working refs are "
-                        "the upstream branches: on a bookmark, `tether restore KEY "
-                        f"--at {q(branch)}` copies it",
+                        "the upstream branches: on a bookmark, `tether restore "
+                        f"--at {q(branch)} -- KEY` copies it",
                     )
                 )
                 continue
@@ -321,7 +324,7 @@ class RecoverOps(RepoCore):
             if len(names) == 1:
                 steps.append(
                     RecoverStep(
-                        f"tether new {q(names[0])} --adopt && tether commit -m "
+                        f"tether new --adopt -- {q(names[0])} && tether commit -m "
                         + q(f"Recover {names[0]}"),
                         f"bookmark {names[0]}: {adopts}",
                     )
@@ -333,7 +336,7 @@ class RecoverOps(RepoCore):
                         None,
                         f"{branch} is the branch of whichever of the bookmarks "
                         f"{', '.join(names)} it was (their names escape alike): "
-                        "`tether new NAME --adopt` with that one, then `tether "
+                        "`tether new --adopt -- NAME` with that one, then `tether "
                         "commit`",
                     )
                 )
@@ -347,15 +350,16 @@ class RecoverOps(RepoCore):
                 )
             else:
                 note = f"bookmark {slug}, made afresh off the trunk: {adopts}"
+            known.append(slug)
             steps.append(
                 RecoverStep(
-                    f"tether new -b {q(slug)} {q(trunk)} --adopt && tether commit "
+                    f"tether new -b {q(slug)} --adopt -- {q(trunk)} && tether commit "
                     f"-m {q(f'Recover {slug}')}",
                     note,
                 )
             )
         # Legacy, removed at 0.1.0: the `restore --at` steps for legacy branches
-        steps.extend(self._legacy_restore_steps(report, target))
+        steps.extend(self._legacy_restore_steps(report, target, known))
         if others and target == current:
             if report.pinned:
                 then = elsewhere
@@ -373,11 +377,16 @@ class RecoverOps(RepoCore):
 
     # Legacy, removed at 0.1.0: the `restore --at` steps for legacy branches
     def _legacy_restore_steps(
-        self, report: RecoverReport, target: str
+        self, report: RecoverReport, target: str, bookmarks: Sequence[str]
     ) -> list[RecoverStep]:
         """A `restore --at` per legacy branch, naming the objects of its native
         branch space (one `(kind, branch_scope)`) together: `restore` refuses
-        some of them alone, the branch being theirs as one."""
+        some of them alone, the branch being theirs as one. Each goes onto a
+        bookmark `recover-<workspace>`, made off the trunk by the first step
+        of its workspace unless `bookmarks` (the VCS's, and those the steps
+        before make) has it, and joined by the rest: `restore` refuses the
+        trunk. Each commits what it restored, since a `new` back onto the
+        bookmark resets a branch whose restore is not committed."""
         q = shlex.quote
         groups: dict[tuple[str, str, str], list[str]] = {}
         workspace_of: dict[str, str] = {}
@@ -391,10 +400,19 @@ class RecoverOps(RepoCore):
                 for ref in branches:
                     groups.setdefault((m.kind, scope, ref), []).append(o.key)
                     workspace_of[ref] = ws
+        made = set(bookmarks)
         steps: list[RecoverStep] = []
         for (_kind, _scope, ref), keys in sorted(
             groups.items(), key=lambda item: (item[1], item[0][2])
         ):
+            ws = workspace_of[ref]
+            bookmark = f"recover-{ws}"
+            start = (
+                f"tether new -- {q(bookmark)}"
+                if bookmark in made
+                else f"tether new -b {q(bookmark)} -- {q(report.trunk)}"
+            )
+            made.add(bookmark)
             together = (
                 f"; {', '.join(keys)} share its branch space, so they are "
                 "restored together"
@@ -403,10 +421,12 @@ class RecoverOps(RepoCore):
             )
             steps.append(
                 RecoverStep(
-                    f"tether restore {' '.join(q(k) for k in keys)} --at {q(ref)}",
-                    f"{ref} is a legacy branch of workspace {workspace_of[ref]} "
-                    "(named before bookmarks) and may hold writes no commit pins: "
-                    f"on a bookmark, this copies it{together}",
+                    f"{start} && tether restore --at {q(ref)} -- "
+                    + " ".join(q(k) for k in keys)
+                    + f" && tether commit -m {q(f'Recover {ref}')}",
+                    f"{ref} is a legacy branch of workspace {ws} (named before "
+                    "bookmarks) and may hold writes no commit pins: this copies it "
+                    f"onto bookmark {bookmark} and pins it{together}",
                 )
             )
         return steps

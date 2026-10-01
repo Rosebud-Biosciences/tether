@@ -65,6 +65,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `tether recover KEY...` suggests `tether repair -- KEY...` for only the
   selected objects whose pins are missing, instead of a repair of every
   object that reached the stores the run left out.
+- `tether recover`'s legacy-branch steps run from the trunk: each moves to a
+  bookmark `recover-<workspace>` off the trunk first, since `restore --at`
+  refuses the trunk, and commits what it restored.
+- `tether recover`'s commands end their options with `--`, so a key such as
+  `--help` or `-x`, or a git branch name starting with `-`, is not read as
+  an option.
 
 ## [0.1.0b5] - 2026-09-25
 

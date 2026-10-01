@@ -1358,12 +1358,15 @@ def recover(
     quoted for the shell) or none, and a `#` note: `repair` of the objects
     whose manifest names a pin their store lacks, the id to set while
     nothing is pinned under this one, a `commit` on the trunk, then `new
-    BOOKMARK --adopt` (`-b BOOKMARK TRUNK` where the VCS has no such
-    bookmark) and a `commit` per bookmark, and a `restore --at` per legacy
-    per-workspace branch. With KEYs no dataset id and nothing that pins
-    anew is suggested, and `repair` names only those: a commit pins every
-    object under the id; the steps end with `tether recover` on every
-    object. Exit 1 if a store could not be listed.
+    --adopt -- BOOKMARK` (`new -b BOOKMARK --adopt -- TRUNK` where the VCS
+    has no such bookmark) and a `commit` per bookmark, and per legacy
+    per-workspace branch a `restore --at` onto a bookmark
+    `recover-<workspace>` off the trunk, and a `commit`. Each command ends
+    its options with `--`, so a key starting with `-` is not read as one.
+    With KEYs no dataset id and nothing that pins anew is suggested, and
+    `repair` names only those: a commit pins every object under the id; the
+    steps end with `tether recover` on every object. Exit 1 if a store could
+    not be listed.
     """
     repo = _repo()
     try:
