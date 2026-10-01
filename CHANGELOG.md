@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0b6] - 2026-10-01
+
 ### Added
 
 - `tether init --dataset-id ID` uses that id instead of a fresh one; anything
@@ -912,7 +914,8 @@ without a pre-release marker and has been removed; its code is this release.
   once, concurrently (~280x faster on a 200-commit repo); local directory
   fingerprints are ~7x cheaper per file.
 
-[Unreleased]: https://github.com/elyall/tether/compare/v0.1.0b5...HEAD
+[Unreleased]: https://github.com/elyall/tether/compare/v0.1.0b6...HEAD
+[0.1.0b6]: https://github.com/elyall/tether/compare/v0.1.0b5...v0.1.0b6
 [0.1.0b5]: https://github.com/elyall/tether/compare/v0.1.0b4...v0.1.0b5
 [0.1.0b4]: https://github.com/elyall/tether/compare/v0.1.0b3...v0.1.0b4
 [0.1.0b3]: https://github.com/elyall/tether/compare/v0.1.0b2...v0.1.0b3
