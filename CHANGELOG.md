@@ -50,6 +50,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Delta table's first.
 - A `file` or `neon` object registered with `at = 0` is refused like any
   other `at`, instead of reading the current head.
+- `tether ops` shows a `restore --at 0` as `restored KEY from 0`, not `from
+  None`.
 - `tether recover` lists per-workspace branches from before bookmarks, which
   may hold uncommitted writes, with a `restore --at` step for each. It
   suggests no dataset id when run on some keys only, and puts `tether repair`

@@ -221,7 +221,7 @@ class OpEntry:
             return "; ".join(bits) or "working refs unchanged"
         if self.command == "restore":
             keys = sorted({*(r.get("created") or []), *(r.get("reset") or [])})
-            if r.get("at"):
+            if r.get("at") is not None:
                 return f"restored {', '.join(keys)} from {r['at']}"
             return f"restored {', '.join(keys)} from {str(r.get('from_commit'))[:12]}"
         if self.command == "fork":

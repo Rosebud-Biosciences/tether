@@ -480,6 +480,9 @@ def test_an_at_of_zero_names_a_state(
     wref = repo.workspace.working_refs["db"]
     assert repo.restore(["db"], at=at) == {"db": wref}
     assert store.system(system).branches[wref] == zero
+    assert repo.ops()[0].summary() == "restored db from 0"
+    r = runner.invoke(app, ["ops", "-n", "1"])
+    assert r.exit_code == 0 and "restore  restored db from 0" in r.stdout, r.output
 
     store.write(system, wref, {"v": 2})
     plan_file = tmp_path_factory.mktemp("plans") / "restore.json"
