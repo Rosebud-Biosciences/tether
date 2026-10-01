@@ -198,15 +198,15 @@ class ForkOps(RepoCore):
                         params={"bookmark": bookmark},
                     )
                 )
-                return self._with_new_preconditions(plan)
+                return self._with_new_preconditions(plan, objects)
         if keep:
             plan.notes.append("keep: refresh the baseline only; working refs unchanged")
-            return self._with_new_preconditions(plan)
+            return self._with_new_preconditions(plan, objects)
         if bookmark is None:
             plan.notes.append(
                 "no bookmark: read-only working copy (`tether new -b NAME` to write)"
             )
-            return self._with_new_preconditions(plan)
+            return self._with_new_preconditions(plan, objects)
         trunk = bookmark == self.config.trunk
         if not trunk and not shared:
             holders = self.bookmark_holders(bookmark)
@@ -222,7 +222,7 @@ class ForkOps(RepoCore):
                         params={"bookmark": bookmark, "holders": holders},
                     )
                 )
-                return self._with_new_preconditions(plan)
+                return self._with_new_preconditions(plan, objects)
         if trunk:
             plan.notes.append(
                 f"on trunk {bookmark!r}: writes land on each object's upstream branch"
@@ -435,7 +435,7 @@ class ForkOps(RepoCore):
                         params=params,
                     )
                 )
-        return self._with_new_preconditions(plan)
+        return self._with_new_preconditions(plan, objects)
 
     def _plan_adopt(self, key: str, m: ObjectManifest, bookmark: str) -> Action | None:
         """What `new --adopt` does with `key`: this dataset's branch for
@@ -595,12 +595,18 @@ class ForkOps(RepoCore):
             f"({short_state(head)}; {writers}); {advice}",
         )
 
-    def _with_new_preconditions(self, plan: Plan) -> Plan:
+    def _with_new_preconditions(
+        self, plan: Plan, objects: Mapping[str, ObjectManifest]
+    ) -> Plan:
         """What `apply_new` must find unchanged: the manifests at the target,
         this workspace, no new holder of the bookmark, the head of every
         branch the plan keeps or resets, the absence of every branch it
         creates afresh, and every branch it adopts still there, still the
-        newest generation and, for `--shared`, still building on the pin."""
+        newest generation and, for `--shared`, still building on the pin.
+
+        Each branch is checked in the store `objects` -- the manifests the
+        plan was made from -- names: the target's, which may register an
+        object this checkout lacks or place it elsewhere."""
         ctx = plan.context
         plan.require(
             "manifest_hash",
@@ -622,9 +628,9 @@ class ForkOps(RepoCore):
                 "{observed}; re-run the plan (or pass --shared)",
             )
         for a in plan.actions:
-            if a.key not in self.objects:
+            if a.key not in objects:
                 continue
-            locator = dict(self.objects[a.key].locator)
+            locator = dict(objects[a.key].locator)
             if a.op == "adopt":
                 plan.require(
                     "ref_present",

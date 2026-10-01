@@ -380,6 +380,122 @@ def test_a_plan_missing_a_required_precondition_is_refused(vcs_root: Path) -> No
     repo.apply_commit(old, verify=False)
 
 
+def _bookmark_with_an_extra_object(repo: Repo) -> str:
+    """`a` on the trunk; bookmark `feat` registers and commits `b` too, and
+    the checkout goes back to the trunk. Returns `b`'s system."""
+    _mem(repo, "a")
+    repo.commit("a")
+    repo.new(bookmark="feat")
+    system = _mem(repo, "b")
+    repo.commit("b")
+    repo.new("main")
+    assert "b" not in repo.objects
+    return system
+
+
+@pytest.mark.parametrize("eager", [True, False])
+def test_new_binds_an_object_only_the_target_registers(
+    vcs_root: Path, eager: bool
+) -> None:
+    """`new` plans from the target's manifests but bound each branch through
+    the checkout's, skipping objects the checkout lacks: the plan then missed
+    their checks and was refused as one an older tether saved."""
+    repo = Repo.init(vcs_root)
+    system = _bookmark_with_an_extra_object(repo)
+    wref = f"tether.ws.{repo.config.dataset_id}.feat"
+
+    plan = repo.plan_new("feat", eager=eager)
+    (action,) = [a for a in plan.actions if a.key == "b"]
+    assert action.op == ("fork" if eager else "defer-fork")
+    bound = [p for p in plan.preconditions if p.key == "b"]
+    if eager:
+        assert [(p.kind, p.params["locator"]["system"]) for p in bound] == [
+            ("ref_absent", system)
+        ]
+    repo.apply_new(Plan.from_json(plan.to_json()))
+    assert repo.workspace.bookmark == "feat"
+    if not eager:
+        repo.materialize_fork("b")
+    assert repo.workspace.working_refs["b"] == wref
+
+    # Back to the bookmark: `b`'s branch sits at its pin and is kept.
+    repo.new("main")
+    plan = repo.plan_new("feat", eager=eager)
+    (action,) = [a for a in plan.actions if a.key == "b"]
+    assert action.op == "reuse"
+    (bound,) = [p for p in plan.preconditions if p.key == "b"]
+    assert bound.kind == "ref_head" and bound.params["locator"]["system"] == system
+    repo.apply_new(Plan.from_json(plan.to_json()))
+    assert repo.workspace.working_refs["b"] == wref
+
+
+def test_cli_new_to_a_bookmark_with_an_object_the_checkout_lacks(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    typer_testing = pytest.importorskip("typer.testing")
+    from tether.cli import app
+
+    runner = typer_testing.CliRunner()
+    repo = Repo.init(vcs_root)
+    _bookmark_with_an_extra_object(repo)
+    monkeypatch.chdir(vcs_root)
+    for args in (["new", "feat", "--eager"], ["new", "main"], ["new", "feat"]):
+        r = runner.invoke(app, args)
+        assert r.exit_code == 0, r.output
+    wref = f"tether.ws.{repo.config.dataset_id}.feat"
+    assert Repo.find(vcs_root).workspace.working_refs["b"] == wref
+
+
+@pytest.mark.parametrize("between", ["nothing", "branch deleted", "newer generation"])
+def test_new_binds_branches_in_the_stores_the_target_names(
+    vcs_root: Path, between: str
+) -> None:
+    """An object the target revision places in another store than the
+    checkout does: the plan adopts the branch in the target's store, so its
+    checks must look there -- the checkout's store holding a branch of the
+    same name let a deleted or superseded one through."""
+    repo = Repo.init(vcs_root)
+    store = default_store()
+    here = _mem(repo, "db")
+    repo.commit("baseline")
+    repo.new(bookmark="feat", eager=True)
+    wref = repo.workspace.working_refs["db"]
+    repo.remove("db")
+    there = _mem(repo, "db")
+    repo.commit("feat: db moves")
+    head = store.write(there, wref, {"uncommitted": 1})
+    target = repo.vcs.resolve("feat")
+    repo.new("main")
+    assert repo.objects["db"].locator["system"] == here
+    assert wref in store.system(here).branches
+
+    plan = repo.plan_new(target, adopt=True)
+    (adopt,) = plan.actions
+    assert adopt.op == "adopt" and adopt.target == wref
+    bound = {p.params["locator"]["system"] for p in plan.preconditions if p.key == "db"}
+    assert bound == {there}
+    saved = plan.to_json()
+    sys = store.system(there)
+    if between == "nothing":
+        repo.apply_new(Plan.from_json(saved))
+        assert repo.workspace.bookmark == "feat"
+        assert repo.objects["db"].locator["system"] == there
+        assert repo.workspace.working_refs["db"] == wref
+        assert sys.branches[wref] == head
+        return
+    if between == "branch deleted":
+        del sys.branches[wref]
+        match = f"{wref} is gone since the plan was made"
+    else:
+        sys.branches[f"{wref}.2"] = head
+        match = f"{wref} is superseded by {wref}.2"
+    with pytest.raises(StalePlanError) as exc:
+        repo.apply_new(Plan.from_json(saved))
+    assert match in str(exc.value)
+    assert repo.workspace.bookmark == "main"
+    assert repo.objects["db"].locator["system"] == here
+
+
 def _edit_promote(data: dict, edit: str) -> None:
     """One hand edit of a saved two-object promote plan (`db`, `db2`)."""
     ffs = [a for a in data["actions"] if a["op"] == "fast-forward"]
