@@ -1,0 +1,16 @@
+name: Feature request
+description: A command, backend or workflow you need
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you are trying to do
+      description: The data, the stores and the problem, before any proposed solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: Commands, options or a backend you have in mind, and whether you would open the pull request.

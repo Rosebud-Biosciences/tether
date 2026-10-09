@@ -9,13 +9,12 @@ display_name: tether
 module: tether  # the distribution is `tether-vcs`; the importable package is `tether`
 parser: google
 dynamic: true
-repo: https://github.com/elyall/tether
-# Project Pages are served under the account's custom domain, so the canonical
-# base must be set explicitly (it would otherwise derive elyall.github.io).
-site_url: https://evanlyall.com/tether/
+repo: https://github.com/Rosebud-Biosciences/tether
+# GitHub Pages serves the project here (no custom domain).
+site_url: https://rosebud-biosciences.github.io/tether/
 seo:
   canonical:
-    base_url: https://evanlyall.com/tether/
+    base_url: https://rosebud-biosciences.github.io/tether/
 
 # Narrative docs live in user_guide/ (numeric prefixes order the sidebar).
 homepage: index

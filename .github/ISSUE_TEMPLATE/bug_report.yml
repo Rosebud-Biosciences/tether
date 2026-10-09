@@ -1,0 +1,28 @@
+name: Bug report
+description: A command, backend or API call that does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: A security problem? Report it privately instead (Security tab, "Report a vulnerability").
+  - type: input
+    id: where
+    attributes:
+      label: Command, API call or backend
+      placeholder: tether new pr12 --adopt, tether.open("vec/greetings"), the neon backend
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: The error, trimmed to what matters, and the steps that produce it (no secrets, credentials in URLs, or account IDs).
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: tether 0.1.0b6 (tether --version), Python 3.12, git or jj version, the backend's package version
+    validations:
+      required: true
