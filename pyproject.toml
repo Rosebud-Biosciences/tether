@@ -13,7 +13,7 @@ description = "Version control (fingerprints, pins, and forks) for heterogeneous
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "tether contributors" }]
 keywords = [
     "version-control",
@@ -73,10 +73,11 @@ all = [
 tether = "tether.cli:main"
 
 [project.urls]
-Homepage = "https://evanlyall.com/tether/"
-Documentation = "https://evanlyall.com/tether/"
-Repository = "https://github.com/elyall/tether"
-Changelog = "https://github.com/elyall/tether/blob/main/CHANGELOG.md"
+Homepage = "https://rosebud-biosciences.github.io/tether/"
+Documentation = "https://rosebud-biosciences.github.io/tether/"
+Repository = "https://github.com/Rosebud-Biosciences/tether"
+Changelog = "https://github.com/Rosebud-Biosciences/tether/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Rosebud-Biosciences/tether/issues"
 
 [dependency-groups]
 dev = [

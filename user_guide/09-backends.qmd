@@ -81,7 +81,7 @@ in [Writing a Backend](11-extending.qmd#capabilities-decide-behavior).
 cannot promote a child branch, so both are refused with instructions. Where
 Icechunk and Lance stand upstream on branch merge, and what blocks it, is a
 dated survey in
-[`docs/upstream-branch-merge.md`](https://github.com/elyall/tether/blob/main/docs/upstream-branch-merge.md).
+[`docs/upstream-branch-merge.md`](https://github.com/Rosebud-Biosciences/tether/blob/main/docs/upstream-branch-merge.md).
 
 **`CONDITIONAL_REF`** means a fork, promote or merge moves the ref only
 from the head the plan reviewed, in one atomic step. The others compare

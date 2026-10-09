@@ -2,10 +2,10 @@
 
 [![PyPI](https://img.shields.io/pypi/v/tether-vcs)](https://pypi.org/project/tether-vcs/)
 [![Python](https://img.shields.io/pypi/pyversions/tether-vcs)](https://pypi.org/project/tether-vcs/)
-[![CI](https://github.com/elyall/tether/actions/workflows/ci.yml/badge.svg)](https://github.com/elyall/tether/actions/workflows/ci.yml)
-[![Coverage](https://codecov.io/gh/elyall/tether/graph/badge.svg)](https://codecov.io/gh/elyall/tether)
-[![Docs](https://github.com/elyall/tether/actions/workflows/docs.yml/badge.svg)](https://evanlyall.com/tether/)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/elyall/tether/blob/main/LICENSE)
+[![CI](https://github.com/Rosebud-Biosciences/tether/actions/workflows/ci.yml/badge.svg)](https://github.com/Rosebud-Biosciences/tether/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/Rosebud-Biosciences/tether/graph/badge.svg)](https://codecov.io/gh/Rosebud-Biosciences/tether)
+[![Docs](https://github.com/Rosebud-Biosciences/tether/actions/workflows/docs.yml/badge.svg)](https://rosebud-biosciences.github.io/tether/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/Rosebud-Biosciences/tether/blob/main/LICENSE)
 
 **Version control (fingerprints, pins, & forks) for heterogeneous datasets.**
 
@@ -21,10 +21,10 @@ manifests to your repository, but where DVC only fingerprints files, tether
 also pins and forks live systems.
 
 > Status: pre-release (`0.1.0` betas).
-> [ROADMAP.md](https://github.com/elyall/tether/blob/main/ROADMAP.md) says
+> [ROADMAP.md](https://github.com/Rosebud-Biosciences/tether/blob/main/ROADMAP.md) says
 > what has run against real services, what is still experimental, and what
 > blocks 0.1.0; the
-> [changelog](https://github.com/elyall/tether/blob/main/CHANGELOG.md) says
+> [changelog](https://github.com/Rosebud-Biosciences/tether/blob/main/CHANGELOG.md) says
 > what changed. Vibe coded with Claude Fable 5.1. **USE AT YOUR OWN RISK.**
 
 ## Install
@@ -38,7 +38,7 @@ pip install "tether-vcs[all]"                 # everything
 The distribution is `tether-vcs`; the package you import and the command you
 run are both `tether`. Python 3.11 or newer; `git` 2.38+ and/or `jj` 0.43+
 on `PATH` (see the
-[CLI guide](https://evanlyall.com/tether/user-guide/cli.html#versions-and-environment)).
+[CLI guide](https://rosebud-biosciences.github.io/tether/user-guide/cli.html#versions-and-environment)).
 Extras: `objectstore` (S3/GCS/Azure for `file`), `icechunk`, `neon`,
 `iceberg`, `delta`, `lance`, `ducklake`, `dolt`, `postgres`, `all`.
 
@@ -94,9 +94,9 @@ The commands that plan before they write -- `commit`, `new`, `restore`,
 `promote`, `gc`, `drop`, `forget-workspace`, `import`, `repair`, `upgrade` --
 take `--dry-run` (and `--plan FILE` / `--from-plan FILE`) so the store writes
 can be reviewed first. The
-[Getting Started guide](https://evanlyall.com/tether/user-guide/getting-started.html)
+[Getting Started guide](https://rosebud-biosciences.github.io/tether/user-guide/getting-started.html)
 runs this walkthrough with full output; the
-[user guide](https://evanlyall.com/tether/user-guide/) takes it from there.
+[user guide](https://rosebud-biosciences.github.io/tether/user-guide/) takes it from there.
 
 ## How it works
 
@@ -149,9 +149,9 @@ the object. **History**: `tether log` lists the object's own snapshots.
 service itself. Stable ones run their full lifecycle in CI; for `file` and
 Icechunk that means local storage, and their S3, GCS and Azure paths have not
 run against a cloud service yet (see the
-[roadmap](https://github.com/elyall/tether/blob/main/ROADMAP.md)). The full
+[roadmap](https://github.com/Rosebud-Biosciences/tether/blob/main/ROADMAP.md)). The full
 matrix -- state fields, flags, per-backend caveats -- is in the
-[backends guide](https://evanlyall.com/tether/user-guide/backends.html).
+[backends guide](https://rosebud-biosciences.github.io/tether/user-guide/backends.html).
 
 ## jj or tether?
 
@@ -162,7 +162,7 @@ one in the stores -- that must happen together: `commit`, `new`, `pull`,
 history -- describe, squash, rebase, push -- is the VCS's, and tether notices
 what it needs to: a bookmark deleted, renamed, or moved by hand shows up in
 `status` with what to do. The
-[concepts guide](https://evanlyall.com/tether/user-guide/concepts.html#jj-or-tether)
+[concepts guide](https://rosebud-biosciences.github.io/tether/user-guide/concepts.html#jj-or-tether)
 has the table.
 
 ## Non-goals
@@ -177,14 +177,14 @@ has the table.
 
 ## Documentation
 
-<https://evanlyall.com/tether/> --
-[getting started](https://evanlyall.com/tether/user-guide/getting-started.html),
-[concepts](https://evanlyall.com/tether/user-guide/concepts.html),
-[worked examples](https://evanlyall.com/tether/user-guide/use-cases.html),
-[CLI guide](https://evanlyall.com/tether/user-guide/cli.html),
-[backends](https://evanlyall.com/tether/user-guide/backends.html),
-[sharing and CI](https://evanlyall.com/tether/user-guide/sharing-and-ci.html),
-[troubleshooting](https://evanlyall.com/tether/user-guide/troubleshooting.html),
+<https://rosebud-biosciences.github.io/tether/> --
+[getting started](https://rosebud-biosciences.github.io/tether/user-guide/getting-started.html),
+[concepts](https://rosebud-biosciences.github.io/tether/user-guide/concepts.html),
+[worked examples](https://rosebud-biosciences.github.io/tether/user-guide/use-cases.html),
+[CLI guide](https://rosebud-biosciences.github.io/tether/user-guide/cli.html),
+[backends](https://rosebud-biosciences.github.io/tether/user-guide/backends.html),
+[sharing and CI](https://rosebud-biosciences.github.io/tether/user-guide/sharing-and-ci.html),
+[troubleshooting](https://rosebud-biosciences.github.io/tether/user-guide/troubleshooting.html),
 and the generated API and CLI reference.
 
 ## Why this exists
@@ -223,6 +223,12 @@ install (`brew install postgresql@16`; GitHub's Ubuntu runners ship it) and
 skip otherwise. The use-cases story (`tests/test_use_cases.py`) regenerates
 the guide's command output with `TETHER_UPDATE_DOCS=1`.
 
+[CONTRIBUTING.md](https://github.com/Rosebud-Biosciences/tether/blob/main/CONTRIBUTING.md)
+has the gates a pull request must pass. Report vulnerabilities privately
+([SECURITY.md](https://github.com/Rosebud-Biosciences/tether/blob/main/SECURITY.md)).
+
 ## License
 
-Apache-2.0. See [LICENSE](https://github.com/elyall/tether/blob/main/LICENSE).
+Apache-2.0, copyright Rosebud Biosciences, Inc. See
+[LICENSE](https://github.com/Rosebud-Biosciences/tether/blob/main/LICENSE) and
+[NOTICE](https://github.com/Rosebud-Biosciences/tether/blob/main/NOTICE).
