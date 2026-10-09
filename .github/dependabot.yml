@@ -1,0 +1,17 @@
+# The workflows' actions are pinned by commit, so Dependabot is what moves
+# them; the lockfile pins every Python dependency the same way.
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      python:
+        patterns: ["*"]

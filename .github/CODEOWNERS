@@ -1,0 +1,5 @@
+# The workflows publish to PyPI as this repository; the package metadata and
+# the lockfile decide what every install pulls.
+/.github/       @elyall
+/pyproject.toml @elyall
+/uv.lock        @elyall

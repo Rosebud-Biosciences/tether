@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The repository moved to
+  [Rosebud-Biosciences/tether](https://github.com/Rosebud-Biosciences/tether)
+  (the old URLs redirect) and the documentation to
+  <https://rosebud-biosciences.github.io/tether/>; the package's links follow.
+  Copyright is Rosebud Biosciences, Inc. (`NOTICE`, now in the wheel).
+
+### Added
+
+- `SECURITY.md` (private reporting and scope), `CONTRIBUTING.md`,
+  `CODE_OF_CONDUCT.md`, `CODEOWNERS`, issue forms, and Dependabot for the
+  workflows' actions and the lockfile.
+
+### Security
+
+- Every workflow pins its actions by commit and starts from a read-only
+  token; jobs that need more ask for it.
+
 ## [0.1.0b6] - 2026-10-01
 
 ### Added
@@ -914,20 +933,20 @@ without a pre-release marker and has been removed; its code is this release.
   once, concurrently (~280x faster on a 200-commit repo); local directory
   fingerprints are ~7x cheaper per file.
 
-[Unreleased]: https://github.com/elyall/tether/compare/v0.1.0b6...HEAD
-[0.1.0b6]: https://github.com/elyall/tether/compare/v0.1.0b5...v0.1.0b6
-[0.1.0b5]: https://github.com/elyall/tether/compare/v0.1.0b4...v0.1.0b5
-[0.1.0b4]: https://github.com/elyall/tether/compare/v0.1.0b3...v0.1.0b4
-[0.1.0b3]: https://github.com/elyall/tether/compare/v0.1.0b2...v0.1.0b3
-[0.1.0b2]: https://github.com/elyall/tether/compare/v0.1.0b1...v0.1.0b2
-[0.1.0b1]: https://github.com/elyall/tether/compare/v0.1.0a10...v0.1.0b1
-[0.1.0a10]: https://github.com/elyall/tether/compare/v0.1.0a9...v0.1.0a10
-[0.1.0a9]: https://github.com/elyall/tether/compare/v0.1.0a8...v0.1.0a9
-[0.1.0a8]: https://github.com/elyall/tether/compare/v0.1.0a7...v0.1.0a8
-[0.1.0a7]: https://github.com/elyall/tether/compare/v0.1.0a6...v0.1.0a7
-[0.1.0a6]: https://github.com/elyall/tether/compare/v0.1.0a5...v0.1.0a6
-[0.1.0a5]: https://github.com/elyall/tether/compare/v0.1.0a4...v0.1.0a5
-[0.1.0a4]: https://github.com/elyall/tether/compare/v0.1.0a3...v0.1.0a4
-[0.1.0a3]: https://github.com/elyall/tether/compare/v0.1.0a2...v0.1.0a3
-[0.1.0a2]: https://github.com/elyall/tether/compare/v0.1.0a1...v0.1.0a2
-[0.1.0a1]: https://github.com/elyall/tether/releases/tag/v0.1.0a1
+[Unreleased]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0b6...HEAD
+[0.1.0b6]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0b5...v0.1.0b6
+[0.1.0b5]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0b4...v0.1.0b5
+[0.1.0b4]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0b3...v0.1.0b4
+[0.1.0b3]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0b2...v0.1.0b3
+[0.1.0b2]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0b1...v0.1.0b2
+[0.1.0b1]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0a10...v0.1.0b1
+[0.1.0a10]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0a9...v0.1.0a10
+[0.1.0a9]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0a8...v0.1.0a9
+[0.1.0a8]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0a7...v0.1.0a8
+[0.1.0a7]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0a6...v0.1.0a7
+[0.1.0a6]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0a5...v0.1.0a6
+[0.1.0a5]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0a4...v0.1.0a5
+[0.1.0a4]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0a3...v0.1.0a4
+[0.1.0a3]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0a2...v0.1.0a3
+[0.1.0a2]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0a1...v0.1.0a2
+[0.1.0a1]: https://github.com/Rosebud-Biosciences/tether/releases/tag/v0.1.0a1
