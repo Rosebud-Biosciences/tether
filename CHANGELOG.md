@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0b7] - 2026-10-09
+
 ### Changed
 
 - The repository moved to
@@ -933,7 +935,8 @@ without a pre-release marker and has been removed; its code is this release.
   once, concurrently (~280x faster on a 200-commit repo); local directory
   fingerprints are ~7x cheaper per file.
 
-[Unreleased]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0b6...HEAD
+[Unreleased]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0b7...HEAD
+[0.1.0b7]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0b6...v0.1.0b7
 [0.1.0b6]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0b5...v0.1.0b6
 [0.1.0b5]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0b4...v0.1.0b5
 [0.1.0b4]: https://github.com/Rosebud-Biosciences/tether/compare/v0.1.0b3...v0.1.0b4
