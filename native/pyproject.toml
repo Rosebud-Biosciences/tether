@@ -1,0 +1,39 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "tether-vcs-native"
+# Released on its own (`native-v*` tags); tether-vcs uses it only when its
+# `API_VERSION` is the one tether expects, whatever this version says.
+version = "0.1.0b1"
+description = "The native directory scanner behind tether-vcs's file backend"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# LICENSE and NOTICE are copies of the repository's own, as an sdist has to
+# carry the files themselves; THIRD-PARTY-NOTICES is cargo-about's.
+license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES"]
+authors = [{ name = "tether contributors" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Rust",
+]
+
+[project.urls]
+Repository = "https://github.com/Rosebud-Biosciences/tether"
+
+[tool.maturin]
+features = ["python", "pyo3/extension-module"]
+module-name = "tether_native"
+
+# uv rebuilds the extension when these change, not only pyproject.toml.
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "Cargo.lock" },
+    { file = "src/**/*.rs" },
+]
