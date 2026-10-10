@@ -28,6 +28,9 @@ Repository = "https://github.com/Rosebud-Biosciences/tether"
 [tool.maturin]
 features = ["python", "pyo3/extension-module"]
 module-name = "tether_native"
+# The toolchain pin is for CI and the release builds; a build from the sdist
+# takes any Rust from `rust-version` on.
+exclude = [{ path = "rust-toolchain.toml", format = "sdist" }]
 
 # uv rebuilds the extension when these change, not only pyproject.toml.
 [tool.uv]
