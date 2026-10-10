@@ -63,7 +63,7 @@ __all__ = [
     "upgrade",
 ]
 
-LAST_BETA_WITH_UPGRADE = "0.1.0b6"
+LAST_BETA_WITH_UPGRADE = "0.1.0b7"
 """The newest release that can upgrade alpha datasets; bump with each beta
 that still ships this package. The 0.1.0 message names it."""
 
