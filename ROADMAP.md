@@ -120,6 +120,35 @@ the app discards preview forks rather than landing them.
     and `tree/<name>/`), so a role that may not delete under the store cannot
     release a Lance fork. The backends guide should name that grant.
 
+**The lab-platform sandbox, again**: tether 0.1.0b6 and 0.1.0b7; 2026-10-08
+and 2026-10-09; the same nine objects, now with Icechunk 2.2. One pull
+request (PR #6) ran a preview in each fork mode, under IAM that denies a pull
+request's roles every store's trunk and pins (lab-platform's
+`protect_trunk`). The sandbox's scripts retired the forks: the Neon branch
+through the Neon API (the `gc`-on-Neon row above still stands), the rest
+through tether. `promote` did not run.
+
+- **Worked:**
+  - `new -b pr6 --eager` forking Lance, Icechunk, Iceberg and the four
+    databases (one Neon branch) and pinning Delta and the `file` prefix,
+    with no write to any trunk or pin;
+  - `new pr6 --adopt` on a later push adopting every fork as it was, the
+    Neon branch the preview's Dagster daemon writes included (the section 1
+    row this closed);
+  - the preview's Dagster writing its forks: Lance on `tree/…pr6/`, an
+    Icechunk branch, a snapshot on the Iceberg table branch;
+  - releasing the Lance, Icechunk and Iceberg working branches;
+  - `pull` and `verify` on `main` under a role only the default branch may
+    assume, recording the databases' new LSN.
+- **Observed:**
+  - Icechunk 2.x keeps every branch and tag in one `repo` object, which
+    creating a fork rewrites: a path-scoped grant cannot let a role fork a
+    repository without also letting it move `main` (1.x's `refs/` could);
+  - a Neon pin by record lasts only as long as the project's history (one
+    day by default): once the database is written again, a fork from an
+    older LSN fails ("LSN is older than cutoff"). Pinning must run more
+    often than that window; the caveats guide should say so.
+
 ## 3. Tests to add
 
 Rows that need no external resource, only time. Each becomes a job or a
