@@ -349,6 +349,7 @@ class ObjectBackend(Protocol):
         comes with the manifest's author present, not at the first read of a
         clone. Default: accept. Raise `BackendError` to refuse.
         """
+        return None
 
     def configure_secrets(
         self, defaults: Mapping[str, Any], rules: Mapping[str, Mapping[str, Any]]

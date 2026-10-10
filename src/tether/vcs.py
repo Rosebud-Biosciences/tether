@@ -30,7 +30,7 @@ import subprocess
 import tempfile
 import threading
 import tomllib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -894,7 +894,7 @@ class JjAdapter:
         return self._auto_track
 
     @contextlib.contextmanager
-    def _parked(self) -> Iterator[None]:
+    def _parked(self) -> Generator[None, None, None]:
         """Snapshot nothing new while tether has the working copy elsewhere
         (see `_JJ_PARKED`); enter once the user's working copy is snapshotted."""
         self._parking.depth = getattr(self._parking, "depth", 0) + 1

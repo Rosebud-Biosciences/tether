@@ -15,7 +15,7 @@ try:  # POSIX advisory locks; without them (Windows) writing commands refuse
     import fcntl
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, Self, TypeVar
@@ -334,7 +334,7 @@ class RepoCore:
     """Why a writing command stops where `fcntl` is missing (Windows)."""
 
     @contextlib.contextmanager
-    def _writer_lock(self, *, readonly: bool = False) -> Iterator[None]:
+    def _writer_lock(self, *, readonly: bool = False) -> Generator[None, None, None]:
         """One writer per checkout, for the duration of a writing command.
 
         Two `tether` processes racing in the same checkout would interleave
@@ -425,7 +425,7 @@ class RepoCore:
     """Seconds a command waits for the checkout lock before giving up."""
 
     @contextlib.contextmanager
-    def _repo_lock(self) -> Iterator[None]:
+    def _repo_lock(self) -> Generator[None, None, None]:
         """One writer per *repository*, across every checkout of it.
 
         The checkout lock cannot order a `gc` here against a `commit` in
@@ -1472,7 +1472,7 @@ class RepoCore:
         return entry
 
     @contextlib.contextmanager
-    def _as_step_of(self, op: OpEntry) -> Iterator[None]:
+    def _as_step_of(self, op: OpEntry) -> Generator[None, None, None]:
         """Journal the operations run inside as steps of `op` (their `parent`),
         so `undo` treats them as one with it: a `drop` leaves its bookmark
         with a `new` and sweeps with a `gc`, and neither may come back on its

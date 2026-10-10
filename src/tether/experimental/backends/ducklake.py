@@ -27,7 +27,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from typing import Any
 
 from tether.backends.base import (
@@ -173,7 +173,7 @@ class DuckLakeBackend(ObjectBackend):
     @contextlib.contextmanager
     def _attached(
         self, locator: Locator, snapshot_id: int | None = None
-    ) -> Iterator[tuple[Any, str]]:
+    ) -> Generator[tuple[Any, str], None, None]:
         """Attach the catalog for one operation; yields ``(connection, alias)``."""
         import duckdb
 
