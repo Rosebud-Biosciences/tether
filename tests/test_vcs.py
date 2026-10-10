@@ -360,7 +360,7 @@ def test_jj_calls_carry_the_users_identity_and_snapshot_settings_only(
     commits must carry, and nothing an alias or template could bend."""
     import tomllib
 
-    from tether.vcs import _jj_user_layer
+    from tether.vcs import _jj_user_config
 
     vcs = detect_vcs(vcs_root)
     if vcs.kind != "jj":
@@ -377,7 +377,7 @@ def test_jj_calls_carry_the_users_identity_and_snapshot_settings_only(
         encoding="utf-8",
     )
     monkeypatch.setenv("JJ_CONFIG", str(cfg))
-    layer = Path(_jj_user_layer("jj", vcs_root)).read_text(encoding="utf-8")
+    layer = Path(_jj_user_config("jj", vcs_root)[0]).read_text(encoding="utf-8")
     assert tomllib.loads(layer) == {
         "user": {"name": "Ada Lovelace", "email": "ada@example.org"},
         "signing": {"behavior": "drop"},
@@ -402,7 +402,7 @@ def test_jj_calls_carry_immutable_heads_and_the_aliases_it_names(
     the rest -- one shadowing `files()` included -- stay behind."""
     import tomllib
 
-    from tether.vcs import _jj_user_layer
+    from tether.vcs import _jj_user_config
 
     if detect_vcs(vcs_root).kind != "jj":
         pytest.skip("jj config layers")
@@ -420,7 +420,7 @@ def test_jj_calls_carry_immutable_heads_and_the_aliases_it_names(
     )
     monkeypatch.setenv("JJ_CONFIG", str(cfg))
     layer = tomllib.loads(
-        Path(_jj_user_layer("jj", vcs_root)).read_text(encoding="utf-8")
+        Path(_jj_user_config("jj", vcs_root)[0]).read_text(encoding="utf-8")
     )
     assert layer["revset-aliases"] == {
         "immutable_heads()": "builtin_immutable_heads() | guarded() | kept",
@@ -428,6 +428,56 @@ def test_jj_calls_carry_immutable_heads_and_the_aliases_it_names(
         "deep(x)": "x-",
         "kept": "root()",
     }
+
+
+def test_auto_track_comes_from_the_listing_that_makes_the_layer(
+    vcs_root: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `snapshot.auto-track` tether narrows is read from the same
+    `jj config list` as the layer, and is what `jj config get` answers: jj's
+    default, the user's value over it, a repo-level one over the user's --
+    which, overridden, stays out of the layer, as `--user` left it out."""
+    import tomllib
+
+    from tether.vcs import _jj_user_config
+
+    if detect_vcs(vcs_root).kind != "jj":
+        pytest.skip("jj config layers")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("xdg")))
+    cfg = tmp_path_factory.mktemp("jjuser") / "user.toml"
+    monkeypatch.setenv("JJ_CONFIG", str(cfg))
+
+    def resolved() -> str:
+        return subprocess.run(
+            ["jj", "config", "get", "snapshot.auto-track"],
+            cwd=vcs_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def layer_and_value() -> tuple[dict, str | None]:
+        layer, theirs = _jj_user_config("jj", vcs_root)
+        return tomllib.loads(Path(layer).read_text(encoding="utf-8")), theirs
+
+    cfg.write_text('[user]\nname = "Ada Lovelace"\n', encoding="utf-8")
+    assert layer_and_value() == ({"user": {"name": "Ada Lovelace"}}, resolved())
+    assert resolved() == "all()"
+    cfg.write_text('[snapshot]\nauto-track = "glob:keep/**"\n', encoding="utf-8")
+    assert layer_and_value() == (
+        {"snapshot": {"auto-track": "glob:keep/**"}},
+        resolved(),
+    )
+    subprocess.run(
+        ["jj", "config", "set", "--repo", "snapshot.auto-track", "none()"],
+        cwd=vcs_root,
+        check=True,
+        capture_output=True,
+    )
+    assert layer_and_value() == ({}, resolved())
+    assert resolved() == "none()"
 
 
 def test_repo_level_aliases_do_not_bend_what_tether_reads(
