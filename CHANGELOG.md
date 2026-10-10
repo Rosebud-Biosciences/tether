@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `tether-vcs-native`, an optional Rust scanner for the `file` backend's
+  local directories (Linux and macOS), built from `native/` with
+  `uv sync --group native` until it is on PyPI. With it installed, a warm
+  `status --snapshot` of a million files takes 2 s instead of 21, in about a
+  quarter of the memory, with the same states, listings and cache file.
+  `TETHER_NATIVE=0` turns it off.
+
 ### Changed
 
 - Commands in a jj repository start up to four fewer `jj` processes. One

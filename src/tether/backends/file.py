@@ -21,6 +21,11 @@ The backend therefore hands the engine a per-file *listing* (JSON lines, sorted
 by path) to store content-addressed in VCS at commit time; ``diff`` compares two
 stored listings file by file.
 
+With ``tether-vcs-native`` installed, a local directory's walk, hash cache,
+hashing, digest and listing run in Rust (``tether_native``) by the same rules
+and against the same cache file, as does the comparison of two listings;
+``TETHER_NATIVE=0`` keeps everything here.
+
 .. _obstore: https://developmentseed.org/obstore/
 """
 
@@ -36,11 +41,13 @@ from collections.abc import Collection, Mapping
 from datetime import timedelta
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from tether.backends.base import (
+    MAX_DIFF_ENTRIES,
     Capability,
+    ChangeEntry,
     Listings,
     ObjectBackend,
     ObjectDiff,
@@ -310,6 +317,45 @@ class _HashCache:
             self._dirty = False
 
 
+NATIVE_API = 1
+"""The `tether_native.API_VERSION` this module calls; another is not used."""
+
+
+class _NativeListing(Protocol):
+    """A directory's rows, held by `tether_native` until a commit asks for
+    their text."""
+
+    def text(self) -> str: ...
+
+
+class _NativeHashCache(Protocol):
+    """`tether_native.HashCache`: :class:`_HashCache` and :func:`_walk` by
+    the same rules, against the same cache file."""
+
+    @property
+    def hashed(self) -> int: ...
+
+    def fingerprint_dir(
+        self, root: str, owner_marker: str, racy_window_ns: int, workers: int
+    ) -> tuple[int, int, str, _NativeListing]: ...
+
+    def fingerprint_file(self, path: str, racy_window_ns: int) -> tuple[int, str]: ...
+
+
+def _native_scanner() -> Any | None:
+    """The `tether_native` module when it is installed, speaks
+    :data:`NATIVE_API` and `TETHER_NATIVE` is not `0`; else `None`."""
+    if os.environ.get("TETHER_NATIVE", "").strip() == "0":
+        return None
+    from importlib import import_module
+
+    try:
+        module = import_module("tether_native")
+    except ImportError:
+        return None
+    return module if getattr(module, "API_VERSION", None) == NATIVE_API else None
+
+
 def _dump_listing(rows: ListingRows) -> str:
     return "".join(
         json.dumps({"p": path, "k": token, "s": size}, separators=(",", ":")) + "\n"
@@ -430,11 +476,30 @@ class FileBackend(ObjectBackend):
         """Open stores by :meth:`_store_key`, each with the credential
         generation it was built for."""
         self._stores_lock = threading.Lock()
-        self._listings: OrderedDict[str, ListingRows] = OrderedDict()
-        self._hashes = _HashCache(None)
+        self._listings: OrderedDict[str, ListingRows | _NativeListing] = OrderedDict()
+        self._listings_lock = threading.Lock()
+        self._native = _native_scanner()
+        self._hashes = self._hash_cache(None)
+        self._fallback_hashes: _HashCache | None = None
 
     def configure_cache(self, cache_dir: Path) -> None:
-        self._hashes = _HashCache(cache_dir / "file-hashes.json")
+        self._hashes = self._hash_cache(cache_dir / "file-hashes.json")
+
+    def _hash_cache(self, path: Path | None) -> _HashCache | _NativeHashCache:
+        if self._native is None:
+            return _HashCache(path)
+        return self._native.HashCache(None if path is None else str(path))
+
+    def _python_hashes(self) -> _HashCache:
+        """The cache the Python scanner uses: the backend's, or -- for a path
+        the native scanner cannot take -- one in memory, since a name that is
+        not UTF-8 in the shared file would make the native scanner discard it
+        on every run."""
+        if isinstance(self._hashes, _HashCache):
+            return self._hashes
+        if self._fallback_hashes is None:
+            self._fallback_hashes = _HashCache(None)
+        return self._fallback_hashes
 
     # -- capability refinement ------------------------------------------ #
     def effective_capabilities(self, locator: Locator, policy: Policy) -> Capability:
@@ -465,15 +530,15 @@ class FileBackend(ObjectBackend):
         # A remote object is re-openable only through its version id.
         return not (state.get("type") == "object" and not state.get("version_id"))
 
-    def _remember(self, digest: str, rows: ListingRows) -> None:
-        with self._hashes._lock:  # shared with the hash cache; one lock per backend
+    def _remember(self, digest: str, rows: ListingRows | _NativeListing) -> None:
+        with self._listings_lock:
             self._listings[digest] = rows
             self._listings.move_to_end(digest)
             while len(self._listings) > self._LISTING_CACHE:
                 self._listings.popitem(last=False)
 
-    def _recall(self, digest: str) -> ListingRows | None:
-        with self._hashes._lock:
+    def _recall(self, digest: str) -> ListingRows | _NativeListing | None:
+        with self._listings_lock:
             rows = self._listings.get(digest)
             if rows is not None:
                 self._listings.move_to_end(digest)
@@ -644,9 +709,15 @@ class FileBackend(ObjectBackend):
     def _fingerprint_local(self, path: Path) -> State:
         if not path.exists():
             raise BackendError(f"path does not exist: {path}", kind="file")
+        if not isinstance(self._hashes, _HashCache):
+            try:
+                return self._fingerprint_native(self._hashes, path)
+            except ValueError:
+                pass  # a path that is not UTF-8: the Python scanner takes it
+        cache = self._python_hashes()
         if path.is_dir():
             entries, links = _walk(path)
-            hashes = self._hashes.hashes([(path / rel, st) for rel, st in entries])
+            hashes = cache.hashes([(path / rel, st) for rel, st in entries])
             rows: ListingRows = {
                 rel: (hashes[path / rel], st.st_size) for rel, st in entries
             }
@@ -660,8 +731,19 @@ class FileBackend(ObjectBackend):
                 "digest": digest,
             }
         st = path.stat()
-        digest = self._hashes.hashes([(path, st)])[path]
+        digest = cache.hashes([(path, st)])[path]
         return {"type": "file", "size": st.st_size, "sha256": digest}
+
+    def _fingerprint_native(self, cache: _NativeHashCache, path: Path) -> State:
+        # The racy window is read here, not fixed at import, as tests set it.
+        if path.is_dir():
+            count, size, digest, rows = cache.fingerprint_dir(
+                str(path), OWNER_MARKER, _RACY_WINDOW_NS, _HASH_WORKERS
+            )
+            self._remember(digest, rows)
+            return {"type": "dir", "count": count, "size": size, "digest": digest}
+        size, digest = cache.fingerprint_file(str(path), _RACY_WINDOW_NS)
+        return {"type": "file", "size": size, "sha256": digest}
 
     def _fingerprint_remote(self, store: Any, key: str) -> State:
         obs = self._obstore()
@@ -806,7 +888,7 @@ class FileBackend(ObjectBackend):
             rows = self._recall(digest)
             if rows is None:  # pragma: no cover - evicted between the two calls
                 return None
-        return _dump_listing(rows)
+        return _dump_listing(rows) if isinstance(rows, dict) else rows.text()
 
     def diff(
         self,
@@ -856,6 +938,15 @@ class FileBackend(ObjectBackend):
                 f"{count_a} -> {count_b} files, {_human(size_b - size_a)}",
             )
             return out
+        if self._native is not None:
+            try:
+                counts = self._native.diff_listings(text_a, text_b, MAX_DIFF_ENTRIES)
+            except ValueError:
+                pass  # a listing only the Python reader below knows how to fail on
+            else:
+                out.added, out.removed, out.modified, entries, out.truncated = counts
+                out.entries = [ChangeEntry(p, c, _human(n)) for p, c, n in entries]
+                return out
         rows_a, rows_b = _load_listing(text_a), _load_listing(text_b)
         for path in sorted(set(rows_a) | set(rows_b)):
             ra, rb = rows_a.get(path), rows_b.get(path)

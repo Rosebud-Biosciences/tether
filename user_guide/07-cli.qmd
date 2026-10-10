@@ -136,6 +136,7 @@ Every environment variable tether reads, in one table:
 | --- | --- |
 | `TETHER_REV` | Default `--rev` for `open` and `Repo.open`: handles resolve read-only at that commit's pinned state. Set it in reproducible jobs. |
 | `PATH`, `TETHER_JJ`, `TETHER_GIT` | Which `jj` and `git` tether runs: `[vcs] jj_path` / `git_path` in `.tether/secrets.toml`, then `TETHER_JJ` / `TETHER_GIT`, then `PATH`. The committed `tether.toml` may not name one. `secrets.toml` is read only after a VCS found through the environment says the per-checkout files are untracked, so a jj reachable only through `jj_path` also needs `TETHER_JJ`. |
+| `TETHER_NATIVE` | `0` keeps the `file` backend on its Python scanner when `tether-vcs-native` is installed ([large trees](12-caveats-and-performance.qmd#large-local-trees-and-the-native-scanner)). |
 | `TETHER_PUBLISH_DSN` | The Postgres DSN `tether publish` writes to when `--to` is not given. |
 | `NEON_API_KEY` | The Neon API key, unless `[backends.neon] api_key_env` in `secrets.toml` names another variable. |
 | the variables a Dolt server's `user_env` / `password_env` name | Dolt credentials, only for the server whose `[uris."mysql://host:port"]` entry names them. |

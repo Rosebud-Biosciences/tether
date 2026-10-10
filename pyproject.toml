@@ -97,9 +97,16 @@ docs = [
     "great-docs>=0.17",
     "quarto-cli>=1.7",
 ]
+# The native scanner built from `native/`, which needs a Rust toolchain:
+# `uv sync --all-extras --group native`. The `file` backend uses it when it is
+# installed (`TETHER_NATIVE=0` turns it off).
+native = ["tether-vcs-native"]
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+tether-vcs-native = { path = "native" }
 
 [tool.uv.build-backend]
 module-name = "tether"
