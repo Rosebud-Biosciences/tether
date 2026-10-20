@@ -31,7 +31,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -75,7 +75,7 @@ class _VcsMeter:
         self.seconds = 0.0
 
     @contextmanager
-    def installed(self) -> Iterator[None]:
+    def installed(self) -> Generator[None, None, None]:
         self.calls, self.seconds = 0, 0.0
         meter = self
         real_run = subprocess.run
