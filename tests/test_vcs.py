@@ -220,6 +220,7 @@ def test_jj_below_the_minimum_version_is_refused(
         return vcs_module._Run(0, "abc\n", "")
 
     monkeypatch.setattr(vcs_module, "_run", fake_run)
+    monkeypatch.setattr(vcs_module, "_jj_checked", set())
     adapter = JjAdapter(tmp_path)
     with pytest.raises(VcsError, match=r"jj 0\.30\.0 is too old"):
         adapter.resolve("@")
