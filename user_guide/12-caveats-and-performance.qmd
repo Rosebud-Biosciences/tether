@@ -195,6 +195,14 @@ goes in `.tether/secrets.toml` as `[objects."<key>"] remote`.
 tether is an orchestrator: its cost is the network round trips it fans out,
 not Python.
 
+### Each command starts a few git or jj processes
+
+On local objects, a command's time is mostly git and jj. A `status` starts 6
+git or 8 jj processes, at 4-6 ms per git call and 7-15 ms per jj call (jj
+loads the repository each time, and most calls snapshot the working copy),
+on top of about 75 ms to start Python. `benchmarks/run.py` in the
+repository measures each command.
+
 ### Fan-out uses threads, not asyncio
 
 Every backend SDK tether wraps (obstore, psycopg, pyiceberg, deltalake,

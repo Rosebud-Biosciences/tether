@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Commands in a jj repository start up to four fewer `jj` processes. One
+  `jj config list` now yields both the user's settings and their
+  `snapshot.auto-track`, one `jj log` the bookmarks the working copy is on,
+  and one more the recorded commits `status` and `ops` check are still
+  alive; each took two or three. `status` starts 8 processes instead of 12,
+  about 45 ms less on a laptop.
+
 ## [0.1.0b7] - 2026-10-09
 
 ### Changed

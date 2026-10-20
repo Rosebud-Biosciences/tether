@@ -80,7 +80,7 @@ their own jj commands. tether's own paths are left out of that
 (`_JJ_TETHER_PATHS`) and tracked by name (`JjAdapter._track`).
 
 Aliases are kept out in two ways. The user's config file is replaced by
-`_jj_user_layer` (`JJ_CONFIG`), which carries `_JJ_USER_KEYS` and, of the
+`_jj_user_config` (`JJ_CONFIG`), which carries `_JJ_USER_KEYS` and, of the
 aliases, only `immutable_heads()` and those it refers to
 (`_JJ_USER_ALIASES`). jj still loads the repo- and workspace-level config
 (kept outside the checkout, written by `jj config set --repo/--workspace`),
@@ -142,13 +142,18 @@ def _alias_closure(aliases: dict[str, str], roots: tuple[str, ...]) -> set[str]:
     return reached
 
 
-def _jj_user_layer(exe: str, root: Path) -> str:
+def _jj_user_config(exe: str, root: Path) -> tuple[str, str | None]:
     """A config file of the user's `_JJ_USER_KEYS` settings and
-    `_JJ_USER_ALIASES` revset aliases, for `JJ_CONFIG`.
+    `_JJ_USER_ALIASES` revset aliases, for `JJ_CONFIG`; and the
+    `snapshot.auto-track` jj resolves (`None` when it is not a string on one
+    line of TOML).
 
-    Read with `jj config list --user` under the user's own environment, in
-    `root` (so `--when.repositories` scopes resolve). One file per distinct
-    content per process, removed at exit.
+    Both come from one `jj config list` of every layer, run under the user's
+    own environment in `root` (so `--when.repositories` scopes resolve). Its
+    user-layer rows are what `jj config list --user` lists, since neither
+    shows a value a later layer overrides, and `snapshot.auto-track` appears
+    once, from whichever layer wins, the defaults included. One file per
+    distinct content per process, removed at exit.
     """
     out = _run(
         [
@@ -156,18 +161,27 @@ def _jj_user_layer(exe: str, root: Path) -> str:
             *_JJ_ISOLATION,
             "config",
             "list",
-            "--user",
+            "--include-defaults",
             "-T",
-            'self.name() ++ "\\x1f" ++ self.value() ++ "\\x1e"',
+            'self.source() ++ "\\x1f" ++ self.name() ++ "\\x1f" ++ self.value()'
+            ' ++ "\\x1e"',
         ],
         cwd=root,
     )
     entries: list[str] = []
     aliases: dict[str, tuple[str, str]] = {}  # name -> (entry, definition)
+    auto_track: str | None = None
     for record in out.stdout.split(_RS):
-        name, sep, value = record.strip("\n").partition(_US)
+        source, _sep, row = record.strip("\n").partition(_US)
+        name, sep, value = row.partition(_US)
+        if not sep:
+            continue
+        if name == "snapshot.auto-track":
+            with contextlib.suppress(tomllib.TOMLDecodeError):
+                resolved = tomllib.loads(f"v = {value}\n")["v"]
+                auto_track = resolved if isinstance(resolved, str) else None
         setting = name.startswith(_JJ_USER_KEYS)
-        if not sep or not (setting or name.startswith("revset-aliases.")):
+        if source != "user" or not (setting or name.startswith("revset-aliases.")):
             continue
         entry = f"{name} = {value}\n"
         try:
@@ -192,7 +206,13 @@ def _jj_user_layer(exe: str, root: Path) -> str:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(text)
             _jj_layers[digest] = path
-    return path
+    return path, auto_track
+
+
+def _auto_track_without_tether(theirs: str) -> str:
+    """The user's `snapshot.auto-track` (jj's default: `all()`) without
+    tether's paths (`_JJ_TETHER_PATHS`)."""
+    return f"({theirs or 'all()'}) ~ {_JJ_TETHER_PATHS}"
 
 
 @atexit.register
@@ -864,7 +884,9 @@ class JjAdapter:
     def _jj(self, *args: str, check: bool = True, cwd: Path | None = None) -> _Run:
         self._require_version()
         if self._user_layer is None:
-            self._user_layer = _jj_user_layer(self._exe, self.root)
+            self._user_layer, theirs = _jj_user_config(self._exe, self.root)
+            if theirs is not None:
+                self._auto_track = _auto_track_without_tether(theirs)
         layer = self._user_layer
         if getattr(self._parking, "depth", 0):
             track = _JJ_PARKED
@@ -879,9 +901,10 @@ class JjAdapter:
         )
 
     def _user_auto_track(self, layer: str) -> str:
-        """The user's `snapshot.auto-track` (jj's default: `all()`) without
-        tether's paths (`_JJ_TETHER_PATHS`); read once per adapter, through
-        the same config layer as every call."""
+        """The user's `snapshot.auto-track` without tether's paths: what the
+        config listing that made the layer said, or -- when that was not a
+        string on one line of TOML -- what jj answers through the same layer,
+        asked once per adapter."""
         if self._auto_track is None:
             out = _run(
                 [self._exe, *_JJ_ISOLATION, "config", "get", "snapshot.auto-track"],
@@ -890,7 +913,7 @@ class JjAdapter:
                 env={"JJ_CONFIG": layer},
             )
             theirs = out.stdout.strip() if out.returncode == 0 else ""
-            self._auto_track = f"({theirs or 'all()'}) ~ {_JJ_TETHER_PATHS}"
+            self._auto_track = _auto_track_without_tether(theirs)
         return self._auto_track
 
     @contextlib.contextmanager
@@ -1302,23 +1325,23 @@ class JjAdapter:
         if bookmark in self.bookmarks():  # jj drops it with its commit; else here
             self._jj("bookmark", "delete", bookmark)
 
-    def _bookmarks_at(self, rev: str) -> list[str]:
+    def current_bookmarks(self) -> list[str]:
+        # One call: the bookmarks at `@`, whether `@` is empty, and the
+        # bookmarks at its parents (`@-`), which count only while it is.
         out = self._jj(
             "log",
             "--no-graph",
             "-r",
-            rev,
+            "@",
             "-T",
-            'self.local_bookmarks().map(|b| b.name()).join("\\n") ++ "\\n"',
-            check=False,
+            'self.local_bookmarks().map(|b| b.name()).join("\\n") ++ "\\x1f"'
+            ' ++ self.empty() ++ "\\x1f" ++ self.parents().map('
+            '|c| c.local_bookmarks().map(|b| b.name()).join("\\n")).join("\\n")',
         )
-        return [b for b in out.stdout.split() if b]
-
-    def current_bookmarks(self) -> list[str]:
-        at = self._bookmarks_at("@")
-        if not at and self.position().get("empty"):
-            at = self._bookmarks_at("@-")
-        return sorted(at)
+        at, empty, parents = [*out.stdout.split(_US), "", ""][:3]
+        if not at.split() and empty.strip() == "true":
+            return sorted(parents.split())
+        return sorted(at.split())
 
     def new_bookmark(self, name: str, rev: str | None) -> None:
         # Start from `rev`, or from where the working copy already is: an
@@ -1545,36 +1568,35 @@ class JjAdapter:
     def alive_commits(self, commits: list[str]) -> set[str]:
         if not commits:
             return set()
-        # Two calls: every visible change id, and the change id of each asked
-        # commit (hidden commits still resolve when named in full).
-        visible = self._jj(
+        # One call over every visible commit and each asked one (a hidden
+        # commit still resolves when named in full), with its change id and
+        # whether it is hidden: an asked commit is alive when some visible
+        # commit carries its change.
+        out = self._jj(
             "log",
             "--no-graph",
             "--ignore-working-copy",
             "-r",
-            "::",
+            f"(::) | ({' | '.join(commits)})",
             "-T",
-            'self.change_id() ++ "\\n"',
+            'self.commit_id() ++ " " ++ self.change_id() ++ " " ++ self.hidden()'
+            ' ++ "\\n"',
             check=False,
         )
-        if visible.returncode != 0:
-            return {c for c in commits if self.commit_alive(c)}
-        changes = set(visible.stdout.split())
-        asked = self._jj(
-            "log",
-            "--no-graph",
-            "--ignore-working-copy",
-            "-r",
-            " | ".join(commits),
-            "-T",
-            'self.commit_id() ++ " " ++ self.change_id() ++ "\\n"',
-            check=False,
-        )
-        if asked.returncode != 0:
+        if out.returncode != 0:
             # One of them does not resolve at all: fall back per commit.
             return {c for c in commits if self.commit_alive(c)}
-        change_of = dict(line.split() for line in asked.stdout.splitlines() if line)
-        return {c for c in commits if change_of.get(c) in changes}
+        visible: set[str] = set()
+        change_of: dict[str, str] = {}
+        for line in out.stdout.splitlines():
+            fields = line.split()
+            if len(fields) != 3:
+                continue
+            commit, change, hidden = fields
+            change_of[commit] = change
+            if hidden == "false":
+                visible.add(change)
+        return {c for c in commits if change_of.get(c) in visible}
 
     def abandon(
         self, revs: list[str], keep_dir: str
