@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +74,23 @@ def repo(vcs_root: Path) -> Repo:
     return repo
 
 
+@pytest.fixture(scope="module")
+def keyed(
+    tmp_path_factory: pytest.TempPathFactory,
+    _vcs_templates: Callable[[str], tuple[Path, dict[str, str]]],
+) -> Repo:
+    """`repo`'s objects, registered once in one git repository, for the tests
+    of `select_keys`: it reads only the manifests, which they leave alone."""
+    if shutil.which("git") is None:
+        pytest.skip("git not on PATH")
+    root = tmp_path_factory.mktemp("keyed")
+    shutil.copytree(_vcs_templates("git")[0], root, symlinks=True, dirs_exist_ok=True)
+    repo = Repo.init(root)
+    for key in KEYS:
+        _mem(repo, key)
+    return repo
+
+
 def _systems(repo: Repo, keys: list[str]) -> list[str]:
     return sorted(str(repo.objects[k].locator["system"]) for k in keys)
 
@@ -103,9 +122,9 @@ def _write(repo: Repo, key: str, payload: dict) -> None:
     ],
 )
 def test_select_keys_takes_exact_keys_and_prefixes(
-    repo: Repo, selectors: list[str] | None, expected: list[str]
+    keyed: Repo, selectors: list[str] | None, expected: list[str]
 ) -> None:
-    assert repo.select_keys(selectors) == expected
+    assert keyed.select_keys(selectors) == expected
 
 
 @pytest.mark.parametrize(
@@ -123,20 +142,20 @@ def test_select_keys_takes_exact_keys_and_prefixes(
     ],
 )
 def test_a_selector_that_matches_nothing_is_named(
-    repo: Repo, selectors: list[str], named: list[str]
+    keyed: Repo, selectors: list[str], named: list[str]
 ) -> None:
     with pytest.raises(ConfigError) as err:
-        repo.select_keys(selectors)
+        keyed.select_keys(selectors)
     for text in named:
         assert text in str(err.value)
 
 
-def test_select_keys_selects_among_other_key_sets(repo: Repo) -> None:
+def test_select_keys_selects_among_other_key_sets(keyed: Repo) -> None:
     among = ["old/a", "old/b", "db"]
-    assert repo.select_keys(["old/"], among=among) == ["old/a", "old/b"]
-    assert repo.select_keys(None, among=among) == ["db", "old/a", "old/b"]
+    assert keyed.select_keys(["old/"], among=among) == ["old/a", "old/b"]
+    assert keyed.select_keys(None, among=among) == ["db", "old/a", "old/b"]
     with pytest.raises(ConfigError, match="no such object: zarr/imaging"):
-        repo.select_keys(["zarr/imaging"], among=among)
+        keyed.select_keys(["zarr/imaging"], among=among)
 
 
 # --------------------------------------------------------------------------- #

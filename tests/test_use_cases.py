@@ -95,6 +95,9 @@ _CHANGE_ID = re.compile(r"(?<![0-9a-zA-Z])[k-z]{8}(?![0-9a-zA-Z])")
 _TIMESTAMP = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[+-]\d{2}:\d{2}|Z)?"
 )
+_AGE = re.compile(r"(?<![0-9])\d+s ago\b")
+"""`status`'s age of cached states, read off the wall clock: a busy machine
+(an `-n auto` run) can take a second between two steps."""
 
 
 class Normalizer:
@@ -179,6 +182,7 @@ class Normalizer:
         for root in self._roots:
             text = text.replace(root, "~")
         text = _TIMESTAMP.sub(self._timestamp, text)
+        text = _AGE.sub("0s ago", text)
         text = _ICECHUNK_ID.sub(self._snapshot, text)
         text = _ICECHUNK_PREFIX.sub(self._snapshot_prefix, text)
         text = _HEX.sub(self._hex, text)

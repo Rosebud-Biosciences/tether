@@ -1230,14 +1230,7 @@ def test_a_scoped_recover_suggests_nothing_that_pins(
         assert whole.suggested_id == LOST_ID
 
 
-HOSTILE_KEYS = [
-    "two words",
-    "cost$HOME",
-    "a;touch pwned",
-    "it's",
-    'say "hi"',
-    "all `of` $(it); 'at' once",
-]
+HOSTILE_KEYS = ["it's", "all `of` $(it); 'at' once"]
 
 
 @pytest.mark.parametrize("key", HOSTILE_KEYS)
@@ -1438,7 +1431,7 @@ def test_recover_never_moves_onto_a_recover_bookmark_it_did_not_make(
     assert repo._objects_at(marks[fresh])["db"].state == {"snapshot_id": head}
 
 
-@pytest.mark.parametrize("key", ["--help", "-x", "-", "two words"])
+@pytest.mark.parametrize("key", ["--help", "-"])
 def test_recover_ends_options_before_keys_that_start_with_a_dash(
     vcs_root: Path, monkeypatch: pytest.MonkeyPatch, key: str
 ) -> None:

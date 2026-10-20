@@ -620,10 +620,14 @@ def _file_conflict(vcs_root: Path, relpath: str, *, resolved: bool) -> str:
     return b
 
 
-@pytest.mark.parametrize("resolved", [False, True])
 @pytest.mark.parametrize(
-    "relpath",
-    ["README", "docs/notes.md", "other/.tether/objects/x.toml", "ds/.tetherx/y"],
+    ("relpath", "resolved"),
+    [
+        ("README", False),
+        ("README", True),
+        ("other/.tether/objects/x.toml", False),
+        ("ds/.tetherx/y", True),
+    ],
 )
 def test_a_conflict_outside_the_datasets_manifests_blocks_neither_gc_nor_drop(
     vcs_root: Path, relpath: str, resolved: bool

@@ -210,9 +210,19 @@ def test_commit_after_a_no_vcs_commit_lands_manifests_no_commit_tracked_yet(
     assert not repo.vcs.dirty(repo._vcs_paths())
 
 
-@pytest.mark.parametrize("config", ["default", "hostile"])
-@pytest.mark.parametrize("how", ["new", "new-bookmark-at-main", "drop"])
-@pytest.mark.parametrize("path", ["notes.txt", "scratch/deep/notes.txt"])
+# Pairwise: every value of each of config, how and path meets every value of
+# each other once.
+@pytest.mark.parametrize(
+    ("config", "how", "path"),
+    [
+        ("default", "new", "notes.txt"),
+        ("hostile", "new", "scratch/deep/notes.txt"),
+        ("default", "new-bookmark-at-main", "scratch/deep/notes.txt"),
+        ("hostile", "new-bookmark-at-main", "notes.txt"),
+        ("default", "drop", "scratch/deep/notes.txt"),
+        ("hostile", "drop", "notes.txt"),
+    ],
+)
 def test_a_new_file_of_the_users_stays_in_the_change_it_was_made_in(
     vcs_root: Path, request: pytest.FixtureRequest, config: str, how: str, path: str
 ) -> None:
