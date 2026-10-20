@@ -46,6 +46,14 @@ from tether.manifest import WORKING_REF_PREFIX, Locator, Pin, State, ref_for_pin
 MAIN = "main"
 _LANCE_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError)
 
+_CREATE_RACE_LOST = (
+    "already exists",
+    "Clone operation should not enter build_manifest",
+)
+"""What `create_branch` raises when a peer created the same branch first.
+The second is Lance 12's internal error from retrying the clone against the
+peer's manifest, seen on Linux, before the peer's branch is listed."""
+
 Ref = tuple[str | None, int | None]
 
 
@@ -311,9 +319,9 @@ class LanceBackend(ObjectBackend):
             ds.create_branch(target, origin)
         except _LANCE_ERRORS as exc:
             # A racing creator that has committed the branch's first manifest
-            # but not yet its ref is refused as "already exists".
+            # but not yet its ref is refused, not listed (`_CREATE_RACE_LOST`).
             if expected is not None and (
-                "already exists" in str(exc)
+                any(lost in str(exc) for lost in _CREATE_RACE_LOST)
                 or target in self._dataset(locator).branches.list()
             ):
                 raise RefMovedError(

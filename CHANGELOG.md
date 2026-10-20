@@ -24,6 +24,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   alive; each took two or three. `status` starts 8 processes instead of 12,
   about 45 ms less on a laptop.
 
+### Fixed
+
+- `status` and `ops` no longer warn that a commit `tether drop` removed is
+  "no longer in VCS history: undone or abandoned outside tether", with
+  advice to `gc` pins `drop` had already released. Only `abandon`'s commits
+  were recognized as tether's own.
+- A Lance object's first writable `open` on a new bookmark that loses a race
+  with another clone creating the same branch is refused with
+  `RefMovedError` when Lance 12 reports the loss as an internal error, as it
+  is when Lance says "already exists"; it failed with `BackendError`.
+
 ## [0.1.0b7] - 2026-10-09
 
 ### Changed

@@ -1,1 +1,1 @@
-tether restore zarr/imaging --from 569de0890973 --discard
+tether restore zarr/imaging --from 8e78d3cb811a --discard

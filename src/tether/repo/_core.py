@@ -1383,14 +1383,15 @@ class RepoCore:
         A `commit` entry counts as drifted when its commit is not part of
         visible history any more (`VcsAdapter.commit_alive`) and tether did
         not do that itself: entries undone by `tether undo`, dropped by
-        `tether abandon`, or rewritten by `abandon` / `upgrade` (whose recorded
-        `rewritten_commits` are followed) are not drift. Newest first.
+        `tether abandon` or `tether drop`, or rewritten by `abandon` /
+        `upgrade` (whose recorded `rewritten_commits` are followed) are not
+        drift. Newest first.
         """
         entries = self.ops()
         gone: set[str] = set()
         alias: dict[str, str] = {}
         for e in entries:
-            if e.command == "abandon":
+            if e.command in ("abandon", "drop"):
                 gone.update(str(c) for c in e.result.get("abandoned") or [])
             for old, new in (e.result.get("rewritten_commits") or {}).items():
                 alias[str(old)] = str(new)
