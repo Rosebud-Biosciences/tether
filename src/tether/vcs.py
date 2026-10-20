@@ -121,6 +121,14 @@ alias can shadow."""
 _jj_layers: dict[str, str] = {}
 _jj_layers_lock = threading.Lock()
 
+_jj_checked: set[tuple[str, int, int, int]] = set()
+"""The jj executables found new enough (`_exe_key`): checked once per process,
+and again once the file is replaced."""
+_jj_configs: dict[tuple[object, ...], tuple[object, str, str | None]] = {}
+"""`_jj_user_config` per executable, root and jj environment: what the config
+files it depends on held when listed (`_jj_config_state`), and its answer."""
+_jj_cache_lock = threading.Lock()
+
 
 def _alias_closure(aliases: dict[str, str], roots: tuple[str, ...]) -> set[str]:
     """The names in `aliases` (revset alias -> definition) that `roots` reach,
@@ -142,7 +150,102 @@ def _alias_closure(aliases: dict[str, str], roots: tuple[str, ...]) -> set[str]:
     return reached
 
 
+def _exe_key(exe: str) -> tuple[str, int, int, int] | None:
+    """The file `exe` runs, as `PATH` finds it, with what changes when it is
+    replaced; `None` when there is none to name."""
+    found = shutil.which(exe)
+    # A relative path with a directory resolves against each call's `cwd`.
+    if found is None or (os.path.dirname(exe) and not os.path.isabs(exe)):
+        return None
+    try:
+        st = os.stat(found)
+    except OSError:
+        return None
+    return found, st.st_ino, st.st_mtime_ns, st.st_size
+
+
+def _jj_env() -> tuple[tuple[str, str], ...]:
+    """What in the environment can change jj's config: `JJ_CONFIG`, jj's other
+    `JJ_*` settings, and the directories its config paths start from."""
+    return tuple(
+        sorted(
+            (k, v)
+            for k, v in os.environ.items()
+            if k.startswith("JJ_") or k in ("HOME", "XDG_CONFIG_HOME", "APPDATA")
+        )
+    )
+
+
+def _config_bytes(path: Path) -> object:
+    """What jj reads at `path`: a file's bytes, a directory's `*.toml` files
+    and theirs, `None` when there is nothing to read."""
+    try:
+        if path.is_dir():
+            return tuple(
+                (p.name, _config_bytes(p)) for p in sorted(path.glob("*.toml"))
+            )
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def _jj_config_state(root: Path) -> tuple[tuple[str, object], ...]:
+    """Every path jj may read config from in `root`, present or not, with
+    what it holds: the user's (`JJ_CONFIG`'s files and directories, else
+    every platform's locations), and the repo's and the workspace's, named
+    by the ids jj keeps under `.jj` (with the in-repo file jj migrates).
+    Contents rather than mtimes: a filesystem's clock can tick slower than
+    two edits."""
+    home = Path(os.path.expanduser("~"))
+    bases = [
+        Path(p)
+        for p in (os.environ.get("XDG_CONFIG_HOME"), os.environ.get("APPDATA"))
+        if p
+    ]
+    bases += [home / ".config", home / "Library" / "Application Support"]
+    jj_dirs = [b / "jj" for b in bases]
+    jj_config = os.environ.get("JJ_CONFIG")
+    if jj_config is not None:
+        paths = [Path(p) for p in jj_config.split(os.pathsep) if p]
+    else:
+        paths = [home / ".jjconfig.toml"]
+        paths += [p for d in jj_dirs for p in (d / "config.toml", d / "conf.d")]
+    dot_jj = root / ".jj"
+    repo = dot_jj / "repo"
+    if repo.is_file():  # a secondary workspace's: the path to its repo
+        with contextlib.suppress(OSError):
+            repo = dot_jj / repo.read_text(encoding="utf-8").strip()
+    paths.append(repo / "config.toml")
+    for kind, id_file in (
+        ("repos", repo / "config-id"),
+        ("workspaces", dot_jj / "workspace-config-id"),
+    ):
+        paths.append(id_file)
+        config_id = _config_bytes(id_file)
+        if isinstance(config_id, bytes) and config_id.strip():
+            name = config_id.decode("utf-8", "replace").strip()
+            paths += [d / kind / name / "config.toml" for d in jj_dirs]
+    return tuple((str(p), _config_bytes(p)) for p in paths)
+
+
 def _jj_user_config(exe: str, root: Path) -> tuple[str, str | None]:
+    """`_list_jj_user_config`, once per process for each executable, root and
+    jj environment, and again once a config file jj reads there changed."""
+    key = (_exe_key(exe), str(root), _jj_env())
+    state = _jj_config_state(root)
+    with _jj_cache_lock:
+        cached = _jj_configs.get(key)
+    if cached is not None:
+        was, layer, auto_track = cached
+        if was == state and os.path.isfile(layer):
+            return layer, auto_track
+    layer, auto_track = _list_jj_user_config(exe, root)
+    with _jj_cache_lock:
+        _jj_configs[key] = (state, layer, auto_track)
+    return layer, auto_track
+
+
+def _list_jj_user_config(exe: str, root: Path) -> tuple[str, str | None]:
     """A config file of the user's `_JJ_USER_KEYS` settings and
     `_JJ_USER_ALIASES` revset aliases, for `JJ_CONFIG`; and the
     `snapshot.auto-track` jj resolves (`None` when it is not a string on one
@@ -927,7 +1030,13 @@ class JjAdapter:
             self._parking.depth -= 1
 
     def _require_version(self) -> None:
-        """Refuse a jj older than `MIN_JJ_VERSION`, once per adapter."""
+        """Refuse a jj older than `MIN_JJ_VERSION`, once per adapter, and asked
+        once per executable file in the process (`_jj_checked`)."""
+        if self._version_checked:
+            return
+        key = _exe_key(self._exe)
+        with _jj_cache_lock:
+            self._version_checked = key in _jj_checked
         if self._version_checked:
             return
         out = _run([self._exe, "--version"], cwd=self.root)
@@ -939,6 +1048,9 @@ class JjAdapter:
                 f"jj {found.group(0)} is too old: tether needs jj {wanted} or newer "
                 f"({self._exe})"
             )
+        if key is not None:
+            with _jj_cache_lock:
+                _jj_checked.add(key)
         self._version_checked = True
 
     def _track(self, relpaths: list[str]) -> None:
