@@ -473,9 +473,10 @@ class ObjectOps(RepoCore):
                 contacted and their cached states stay as they are.
             upstream: Contact the upstream branch of objects without a working
                 ref.
-            failures: Collect each object whose fingerprint failed here, and
-                leave it out of the result, instead of raising. Either way
-                the failure is cached (see `status`).
+            failures: Collect each object whose fingerprint failed here, or
+                that changed against an immutable policy, and leave it out of
+                the result, instead of raising. Either way the failure is
+                cached (see `status`).
 
         Returns:
             Current state per object key.
@@ -483,7 +484,8 @@ class ObjectOps(RepoCore):
         Raises:
             ConfigError: A selector in `keys` matches no object.
             ImmutableObjectModified: An Observed object with `policy.file ==
-                "immutable"` changed since it was committed.
+                "immutable"` changed since it was committed (without
+                `failures`).
             MultiObjectError: One or more fingerprints failed (without
                 `failures`).
         """
@@ -519,14 +521,19 @@ class ObjectOps(RepoCore):
                 return backend.fingerprint(m.locator, ref)
 
             states, errors = self._fanout_collect(fp, read)
-            if failures is not None:
-                failures.update(errors)
             for key, m in self.objects.items():
                 if wanted is not None and key not in wanted:
                     continue
                 if key not in states and key not in errors and m.state is not None:
                     states[key] = dict(m.state)
-            self._enforce_immutability(states)
+            # A changed immutable object fails like an unreadable one: cached
+            # as its error, so a later cached `status` still says so.
+            violations = self._immutability_violations(states)
+            for key, exc in violations.items():
+                del states[key]
+                errors[key] = exc
+            if failures is not None:
+                failures.update(errors)
             # Cache what was actually read. A partial (commit-time) snapshot
             # must not overwrite what an earlier fan-out learned about
             # upstream: a `behind` object stays `behind` in a local `status`
@@ -554,8 +561,11 @@ class ObjectOps(RepoCore):
                 failed[key] = {"ref": self._ref_read(key), "error": str(exc)}
             self.workspace.touch_snapshot(cached, failed)
             write_workspace(self.root, self.workspace)
-        if errors and failures is None:
-            raise MultiObjectError("fan-out failed", errors)
+        if failures is None:
+            for exc in violations.values():
+                raise exc
+            if errors:
+                raise MultiObjectError("fan-out failed", errors)
         return states
 
     def _ref_read(self, key: str) -> str:
@@ -576,8 +586,11 @@ class ObjectOps(RepoCore):
             return None
         return failed.get("error") or "the last snapshot could not read it"
 
-    def _enforce_immutability(self, states: dict[str, State]) -> None:
-        """Raise for an Observed `file = "immutable"` object that changed."""
+    def _immutability_violations(
+        self, states: dict[str, State]
+    ) -> dict[str, ImmutableObjectModified]:
+        """Each Observed `file = "immutable"` object whose state changed."""
+        violations: dict[str, ImmutableObjectModified] = {}
         for key, state in states.items():
             m = self.objects[key]
             backend = self.backend_for(m.kind)
@@ -588,12 +601,18 @@ class ObjectOps(RepoCore):
                 and m.state is not None
                 and not self._same(m.kind, state, m.state)
             ):
-                raise ImmutableObjectModified(
+                violations[key] = ImmutableObjectModified(
                     f"immutable object {key!r} changed since it was committed; "
                     f"re-register with acceptance to record the new state",
                     key=key,
                     kind=m.kind,
                 )
+        return violations
+
+    def _enforce_immutability(self, states: dict[str, State]) -> None:
+        """Raise for an Observed `file = "immutable"` object that changed."""
+        for exc in self._immutability_violations(states).values():
+            raise exc
 
     def status(
         self, keys: Sequence[str] | None = None, *, do_snapshot: bool = True

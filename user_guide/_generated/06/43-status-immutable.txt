@@ -1,1 +1,9 @@
-error: [raw/plate2] immutable object 'raw/plate2' changed since it was committed; re-register with acceptance to record the new state
+dataset a864ece136f3; on trunk bookmark main
+      clean  code  [git/forkable]
+      clean  features  [lance/forkable]
+      clean  qc/focus  [lance/forkable]
+      clean  raw/plate1  [file/observed] unrecoverable
+      error  raw/plate2  [file/observed] unrecoverable
+      clean  raw/plate3  [file/observed] unrecoverable
+      clean  zarr/imaging  [icechunk/forkable]
+error: raw/plate2: [raw/plate2] immutable object 'raw/plate2' changed since it was committed; re-register with acceptance to record the new state

@@ -187,15 +187,17 @@ belong in an object store with versioning enabled (single objects with
 `status --snapshot` fingerprints everything, so drift surfaces the next time
 you ask. The directory was registered with the default `--file immutable`, so
 if a file under `/mnt/instruments/plate1/` changes -- its *content*; a `touch`
-is not a change -- `status` stops:
+is not a change -- `status` labels it `error`, with the reason on stderr, and
+exits 1:
 
 ```bash
 tether status --snapshot
 ```
 
 ```
-error: [raw/plate1] immutable object 'raw/plate1' changed since it was committed;
-re-register with acceptance to record the new state
+      error  raw/plate1  [file/observed] unrecoverable
+error: raw/plate1: [raw/plate1] immutable object 'raw/plate1' changed since it
+was committed; re-register with acceptance to record the new state
 ```
 
 That is deliberate: an "immutable" input silently changing is the worst kind

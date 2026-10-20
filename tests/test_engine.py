@@ -212,16 +212,27 @@ def test_stale_working_copy_blocks_writes(vcs_root: Path) -> None:
 
 
 def test_immutable_file_drift_is_error(vcs_root: Path) -> None:
+    """A changed immutable object is its own `error` row, beside the rest of
+    the report (a cached `status` too); `snapshot`, what `commit` relies on,
+    still refuses."""
     repo = Repo.init(vcs_root)
     data = vcs_root / "data.bin"
     data.write_text("original", encoding="utf-8")
     repo.add("f", "file", {"uri": str(data)})
+    _mem_object(repo, "ok")
     res = repo.commit("baseline")
     assert "f" in res.unrecoverable  # Observed tier: recorded, not recoverable
 
     data.write_text("changed content", encoding="utf-8")
+    for fresh in (True, False):
+        by_key = {o.key: o for o in repo.status(do_snapshot=fresh).objects}
+        assert {k: o.state_label for k, o in by_key.items()} == {
+            "f": "error",
+            "ok": "clean",
+        }
+        assert by_key["f"].error and "immutable object 'f' changed" in by_key["f"].error
     with pytest.raises(ImmutableObjectModified):
-        repo.status()
+        repo.snapshot()
 
 
 def test_trunk_uses_base_branch(vcs_root: Path) -> None:
