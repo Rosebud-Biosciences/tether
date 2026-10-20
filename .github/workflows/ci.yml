@@ -48,6 +48,12 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
+        # Coverage on one leg, with icechunk 2.x (Python 3.12+): under 1.x the
+        # store-lifecycle tests and the use-cases story skip. Only 1.x's
+        # fallback, for an icechunk without the lifecycle API, goes unmeasured.
+        include:
+          - python-version: "3.13"
+            coverage: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # jj has no official setup action; install the release binary so the
@@ -68,9 +74,13 @@ jobs:
           enable-cache: true
       - run: uv sync --all-extras --python ${{ matrix.python-version }}
       - name: pytest
+        if: ${{ !matrix.coverage }}
+        run: uv run pytest -n auto
+      - name: pytest with coverage
+        if: ${{ matrix.coverage }}
         run: uv run pytest -n auto --cov=tether --cov-report=xml --cov-report=term-missing:skip-covered
       - name: Upload coverage
-        # One upload per matrix leg; Codecov merges them into a single report.
+        if: ${{ matrix.coverage }}
         # Pushes to a branch are not "tokenless" uploads (only fork PRs are),
         # so authenticate with the job's OIDC token rather than a stored
         # CODECOV_TOKEN. A failed upload fails the leg: a silently missing
