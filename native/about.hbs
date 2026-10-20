@@ -1,0 +1,21 @@
+Third-party notices for tether-vcs-native
+
+tether-vcs-native is licensed under Apache-2.0 (LICENSE, NOTICE). Its
+extension module is compiled from the Rust crates below, each used under the
+license it is listed with; a crate compiled in two versions is listed twice.
+
+Crates per license:
+{{#each overview}}
+  {{{name}}}: {{count}}
+{{/each}}
+{{#each licenses}}
+
+================================================================================
+{{{name}}}, used by:
+{{#each used_by}}
+  {{crate.name}}
+{{/each}}
+================================================================================
+
+{{{text}}}
+{{~/each}}

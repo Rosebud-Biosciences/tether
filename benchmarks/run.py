@@ -14,7 +14,9 @@ machine, with nothing else running.
   object, one 200-file directory), in-process, split into the time spent
   waiting on git/jj and everything else, with the number of git/jj processes.
 - **tree**: the `file` backend's fingerprint of `--files` small files, cold
-  (empty hash cache) and warm, each in a fresh process, with peak memory.
+  (empty hash cache) and warm, each in a fresh process, with peak memory; by
+  the Python scanner and, when `tether-vcs-native` is installed
+  (`uv sync --group native`), the native one.
 - **history**: `plan_gc` over `--commits` commits, which reads every manifest
   in history through one `git cat-file --batch`.
 """
@@ -31,7 +33,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -75,7 +77,7 @@ class _VcsMeter:
         self.seconds = 0.0
 
     @contextmanager
-    def installed(self) -> Iterator[None]:
+    def installed(self) -> Generator[None, None, None]:
         self.calls, self.seconds = 0, 0.0
         meter = self
         real_run = subprocess.run
@@ -186,7 +188,9 @@ start = time.perf_counter()
 backend.fingerprint({"uri": sys.argv[1]}, None)
 seconds = time.perf_counter() - start
 peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-print(json.dumps({"seconds": seconds, "peak": peak, "hashed": backend._hashes.hashed}))
+native = backend._native is not None
+print(json.dumps({"seconds": seconds, "peak": peak, "hashed": backend._hashes.hashed,
+                  "native": native}))
 """
 
 
@@ -201,22 +205,28 @@ def bench_tree(work: Path, files: int) -> None:
     # The cache distrusts a hash taken this soon after the file changed, and
     # the warm run would read every file again.
     time.sleep(_RACY_WINDOW_NS / 1e9 + 0.5)
-    cache = work / "tree-cache"
     unit = 1 if sys.platform == "darwin" else 1024  # ru_maxrss: bytes vs KiB
-    for label in ("cold", "warm"):
-        out = subprocess.run(
-            [sys.executable, "-c", _FINGERPRINT, str(tree), str(cache)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        result = json.loads(out.stdout)
-        peak = result["peak"] * unit / 1e6
-        per_file = result["seconds"] / files * 1e6
-        print(
-            f"  {label}  {result['seconds']:7.2f} s  {per_file:5.1f} us/file  "
-            f"peak {peak:6.0f} MB  hashed {result['hashed']:,}"
-        )
+    for scanner, switch in (("python", "0"), ("native", "1")):
+        cache = work / f"tree-cache-{scanner}"
+        for label in ("cold", "warm"):
+            out = subprocess.run(
+                [sys.executable, "-c", _FINGERPRINT, str(tree), str(cache)],
+                check=True,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "TETHER_NATIVE": switch},
+            )
+            result = json.loads(out.stdout)
+            if result["native"] != (scanner == "native"):
+                print(f"  {scanner}: not installed (uv sync --group native)")
+                break
+            peak = result["peak"] * unit / 1e6
+            per_file = result["seconds"] / files * 1e6
+            print(
+                f"  {scanner:6} {label}  {result['seconds']:7.2f} s  "
+                f"{per_file:5.1f} us/file  peak {peak:6.0f} MB  "
+                f"hashed {result['hashed']:,}"
+            )
 
 
 def bench_history(work: Path, commits: int, kinds: list[str]) -> None:

@@ -91,3 +91,76 @@ jobs:
           flags: py${{ matrix.python-version }}
           use_oidc: true
           fail_ci_if_error: true
+
+  native:
+    # The Rust scanner in native/, and the suite run through it. The jobs
+    # above test the Python scanner: `--all-extras` leaves the `native`
+    # dependency group, and the Rust toolchain it needs, out.
+    permissions:
+      contents: read
+      id-token: write # Codecov upload, as in `test`
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install jj
+        # The Linux binary only: on macOS the jj-parametrized tests skip.
+        if: runner.os == 'Linux'
+        env:
+          JJ_VERSION: v0.45.1
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/jj.tar.gz \
+            "https://github.com/jj-vcs/jj/releases/download/${JJ_VERSION}/jj-${JJ_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          tar -xzf /tmp/jj.tar.gz -C /tmp ./jj
+          sudo install -m 0755 /tmp/jj /usr/local/bin/jj
+          jj --version
+      - name: Rust format, lint and unit tests
+        working-directory: native
+        run: |
+          rustup toolchain install # the one native/rust-toolchain.toml pins
+          cargo --version
+          cargo fmt --check
+          cargo clippy --all-targets --features python -- -D warnings
+          cargo test
+      - name: THIRD-PARTY-NOTICES matches Cargo.lock
+        # A crate that comes, goes or changes its license text needs the file
+        # regenerated (CONTRIBUTING.md has the command).
+        if: runner.os == 'Linux'
+        working-directory: native
+        env:
+          CARGO_ABOUT_VERSION: "0.9.2"
+          CARGO_ABOUT_SHA256: 9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af
+        run: |
+          set -euo pipefail
+          release="cargo-about-${CARGO_ABOUT_VERSION}-x86_64-unknown-linux-musl"
+          curl -fsSL -o /tmp/cargo-about.tar.gz \
+            "https://github.com/EmbarkStudios/cargo-about/releases/download/${CARGO_ABOUT_VERSION}/${release}.tar.gz"
+          echo "${CARGO_ABOUT_SHA256}  /tmp/cargo-about.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/cargo-about.tar.gz -C /tmp --strip-components=1 "${release}/cargo-about"
+          cargo fetch --locked
+          /tmp/cargo-about generate --features python --frozen --fail about.hbs -o /tmp/notices
+          diff -u THIRD-PARTY-NOTICES /tmp/notices
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --group native --python 3.13
+      - name: The native scanner is the one in use
+        run: uv run python -c "from tether.backends.file import _native_scanner as n; assert n()"
+      - name: pytest
+        run: uv run pytest --cov=tether --cov-report=xml --cov-report=term-missing:skip-covered
+      - name: Upload coverage
+        # The branches that run only with the scanner loaded are measured
+        # here; Codecov merges this report with the `test` legs'.
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: coverage.xml
+          flags: native-${{ runner.os }}
+          use_oidc: true
+          fail_ci_if_error: true

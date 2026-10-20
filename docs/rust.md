@@ -1,8 +1,9 @@
 # Rust for tether: where the time goes, and a plan
 
-Measured **2026-10-09** on tether 0.1.0b6, Python 3.13, git 2.54 and jj
-0.45.1, on an Apple Silicon laptop. `benchmarks/run.py` reproduces every
-number below except the Rust prototype's; rerun it before relying on them.
+Measured **2026-10-09** on tether 0.1.0b6 and 0.1.0b7, Python 3.13, git 2.54
+and jj 0.45.1, on an Apple Silicon laptop. `benchmarks/run.py` reproduces the
+numbers below (the native scanner's after `uv sync --group native`); rerun it
+before relying on them.
 
 The question was whether to rewrite tether, or its core, in Rust for speed
 and memory safety. This note records what the measurements say, what any
@@ -16,13 +17,13 @@ removes neither: the CLI would still start Python to load the backends, and
 it would still make every jj call. Python is already memory-safe.
 
 The exception is fingerprinting a large local directory, which is bound by
-per-file interpreter work in Python. A throwaway Rust port of that one loop
-ran about 8× faster warm and 3–4× faster cold, with about a quarter of the
-memory, and produced the same digest from the same cache file.
+per-file interpreter work in Python. That loop is now native (`native/`,
+phase 1 below): on a million files a warm `status --snapshot` takes 2.1 s
+instead of 21, in 0.74 GB instead of 2.7, with the same states, listings and
+cache file.
 
-So: cut jj calls in Python (done here, below), move the directory scanner
-to Rust if trees of 10⁵–10⁶ files matter, and revisit a Rust core only once
-0.1.0 has frozen the on-disk formats.
+So: jj calls are cut (phase 0), the directory scanner is native (phase 1),
+and a Rust core waits until 0.1.0 has frozen the on-disk formats.
 
 ## Where a command's time goes
 
@@ -94,28 +95,43 @@ list` a command) is the trust boundary of the security model and stays.
 
 The `file` backend's local fingerprint walks the directory, stats every
 file, looks each up in a JSON hash cache (`.tether/cache/file-hashes.json`),
-sha256-hashes the misses on 8 threads and digests the sorted `(path, hash)`
-pairs. On 100,018 files of about 80 bytes:
+sha256-hashes the misses and digests the sorted `(path, hash)` pairs. The
+native scanner (`tether_native`, built from `native/`) does the same, by the
+same rules, against the same cache file. On 100,000 files of about 80 bytes,
+each run in a fresh process, peak memory included:
 
-| | Python (tether) | Rust prototype |
+| | Python | native |
 | --- | --: | --: |
-| walk only | 0.88 s | 0.16 s |
-| warm fingerprint (every file a cache hit) | 1.7 s, 313 MB peak | 0.2 s, 85 MB peak |
-| cold fingerprint (every file hashed) | 4.8–7.5 s, 469 MB peak | 1.6 s, 101 MB peak |
+| warm fingerprint (every file a cache hit) | 1.78 s, 337 MB | 0.15 s, 107 MB |
+| cold fingerprint (every file read) | 5.19 s, 491 MB | 1.63 s, 113 MB |
+| diff of two 100k-path listings | 186 ms | 36 ms |
 
-The prototype was about 200 lines, with the same walk rules (directory
-symlinks recorded by target, file symlinks read through, the owner marker
-skipped), the same cache file format and the same digests. It read the cache
-Python had written and produced the same digest,
-`bda8681188601d3ae46e97386aaedd1c`. It is not committed.
+And a whole `tether status --snapshot` of one directory of a million empty
+files, the process included:
 
-Scaled linearly to the ROADMAP's 10⁶-file row, Python needs about 17 s and
-3 GB for a warm `status --snapshot` and 50–75 s and 4.5 GB cold; the
-prototype about 2 s and under 1 GB warm. Most of the prototype's memory is
-the parsed JSON cache, so a compact binary cache would cut it further; the
-cache is untracked, so changing its format costs one re-hash and nothing
-committed. Large files would gain little: `hashlib`'s sha256 already runs
-at 3.2 GiB/s per core, and the GIL is released while it does.
+| | Python | native |
+| --- | --: | --: |
+| warm | 21.0 s, 2.7 GB | 2.1 s, 0.74 GB |
+| cold | 48.7 s, 4.3 GB | 10.8 s, 0.79 GB |
+
+Three findings shaped it. On macOS a per-file `lstat` stops scaling past
+the kernel's vnode cache (`kern.maxvnodes`, about 263k here): a million of
+them took 4.9 s, where `getattrlistbulk(2)` returns the same attributes a
+directory at a time, in 1.2 s for the million; the scanner uses it where
+the filesystem supports it, and readdir with `lstat` elsewhere. APFS
+serializes concurrent opens, so hashing small files on more than four
+threads slowed a cold scan down (1.0 s on 4, 2.6 s on 8, 5 s on 16): the
+native scanner hashes on four there and eight elsewhere. And a process-wide
+thread pool hangs a process forked after a scan, so its threads live for
+one scan, as the Python scanner's do.
+
+`tests/test_native.py` runs both scanners on the same trees -- non-ASCII,
+`#` and control characters in names, every kind of symlink, a FIFO, a
+symlink loop, unreadable files and directories, the owner marker at the
+root and below it -- and requires the same states, listings, cache entries,
+errors and listing diffs; `tests/test_golden.py` passes either way. Large
+files gain little: `hashlib`'s sha256 already runs at 3.2 GiB/s per core,
+and the GIL is released while it does.
 
 ## What Rust would and would not buy
 
@@ -132,7 +148,7 @@ link many of the same. What Rust adds is checking:
   `isinstance` checks in `src/`);
 - errors as values, and distinct types for pin ids, ref names, dataset ids
   and bookmark slugs, all `str` today;
-- compact memory, the 4× above.
+- compact memory, the 3–4× above.
 
 It would not touch the open correctness rows of `ROADMAP.md` section 1:
 Lance's conditional-fork window and Icechunk's non-atomic moves on local
@@ -181,35 +197,42 @@ A rewrite would also reopen every edge case fixed across sixteen releases.
 | --- | --- | --- | --- | --- |
 | Moves to Rust | nothing | the `file` backend's walk, hash cache, digests and listing diff | engine, manifests, plans, op log, locks, VCS adapters (about 14k lines) | all of it (about 29k lines), backends on native crates |
 | A local command | jj `status` from 133 to 87 ms (done) | unchanged | up to 30 ms less; startup stays | 85–100 ms less; git/jj calls stay |
-| 10⁶-file tree | perhaps 2× (a guess) | about 8× warm, 3–4× cold, 4× less memory (measured at 10⁵) | as the scanner | as the scanner |
+| 10⁶-file tree | perhaps 2× (a guess) | 10× warm, 4.5× cold, 3.6× less memory (done) | as the scanner | as the scanner |
 | Handles, plugins, storage engines | unchanged | unchanged | unchanged | rebuilt; plugins lost; engines bundled |
-| Packaging | one pure-Python wheel | platform wheels, pure-Python fallback | platform wheels; sdist needs Rust | binary plus wheels |
-| Effort, roughly | done | 2–3 weeks | 2–4 months | 4–6 months or more |
+| Packaging | one pure-Python wheel | a separate platform wheel; tether-vcs stays pure Python | platform wheels; sdist needs Rust | binary plus wheels |
+| Effort, roughly | done | done | 2–4 months | 4–6 months or more |
 | Risk to 0.1.0 | none | low | high | very high |
 
 ## Plan
 
-**Phase 0, in Python (this change).** Fewer jj calls; process counts
-pinned (`tests/test_vcs_calls.py`); every hashed or committed format pinned
+**Phase 0, in Python (done).** Fewer jj calls; process counts pinned
+(`tests/test_vcs_calls.py`); every hashed or committed format pinned
 (`tests/test_golden.py`); `benchmarks/run.py`. Still to do: turn the tests'
 monkeypatches of engine internals into explicit seams, and stop the `file`
 backend keeping an `os.stat_result` and a `Path` per file.
 
-**Phase 1, a Rust scanner, if 10⁵–10⁶-file trees matter.**
+**Phase 1, a Rust scanner (done).**
 
-- `tether._native`, PyO3 and maturin, abi3 for Python 3.11+: walk, stat
-  cache, parallel sha256, digest, listing text and listing diff. Listing
-  rows stay in Rust; Python gets digest, count and size, and asks for the
-  JSONL only at commit.
-- The Python scanner stays, as the fallback and as the oracle of
-  differential tests over generated trees: symlinks, non-ASCII and `#` in
-  names, racy timestamps, the owner marker, unreadable files.
-- Shipped first as an optional extra (`tether-vcs[native]`), so the main
-  wheel stays pure Python for a release; maturin-action builds manylinux and
-  musllinux (x86_64, aarch64), macOS (arm64, x86_64) and Windows x64 wheels,
-  each smoke-tested in the publish job.
-- Done when the differential suite and `tests/test_golden.py` pass against
-  it, and a warm `status --snapshot` of 10⁶ files takes under 3 s and 1 GB.
+- `native/` builds `tether-vcs-native` (PyO3 and maturin, abi3 for Python
+  3.11+, Linux and macOS). Its `tether_native` module walks, keeps the hash
+  cache, hashes, digests, writes the listing text and diffs two listings.
+  Listing rows stay in Rust until a commit asks for their text.
+- The `file` backend uses it when it is installed and speaks its
+  `API_VERSION`; `TETHER_NATIVE=0` turns it off. The Python scanner stays as
+  the fallback (no wheel, Windows, a path that is not UTF-8) and as the
+  oracle of `tests/test_native.py`.
+- The exit criterion held: a warm `status --snapshot` of 10⁶ files takes
+  2.1 s and 0.74 GB.
+- CI's `native` job runs cargo's checks, on the Rust that
+  `native/rust-toolchain.toml` pins, and the whole suite through it on
+  Linux and macOS. On a `native-v*` release, `publish-native.yml` builds
+  manylinux and musllinux (x86_64, aarch64) and macOS (arm64, x86_64)
+  wheels and an sdist, tests every wheel on its own platform against the
+  Python scanner, and publishes through a `pypi-native` trusted publisher.
+- Still to do: the first release (the PyPI project and its trusted
+  publisher), then a `tether-vcs[native]` extra, which can name the package
+  only once PyPI has it; until then `uv sync --group native` builds it from
+  `native/`.
 
 **Phase 2, after 0.1.0, if the numbers still point at Python.** 0.1.0
 deletes the upgrade path (about 1.3k lines and the marked legacy sites) and
@@ -230,6 +253,6 @@ Python, and `repo.open()` is the product.
 ## Re-checking
 
 `uv run python benchmarks/run.py` prints startup, each command's time and
-git/jj process count, the tree fingerprint (`--files`) and `plan_gc` over a
-history (`--commits`). When a change moves these, update the tables here
-and, for process counts, `tests/test_vcs_calls.py`.
+git/jj process count, the tree fingerprint by both scanners (`--files`) and
+`plan_gc` over a history (`--commits`). When a change moves these, update
+the tables here and, for process counts, `tests/test_vcs_calls.py`.

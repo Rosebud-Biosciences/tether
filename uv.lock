@@ -3369,6 +3369,9 @@ docs = [
     { name = "great-docs" },
     { name = "quarto-cli" },
 ]
+native = [
+    { name = "tether-vcs-native" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -3418,6 +3421,12 @@ docs = [
     { name = "great-docs", specifier = ">=0.17" },
     { name = "quarto-cli", specifier = ">=1.7" },
 ]
+native = [{ name = "tether-vcs-native", directory = "native" }]
+
+[[package]]
+name = "tether-vcs-native"
+version = "0.1.0b1"
+source = { directory = "native" }
 
 [[package]]
 name = "tinycss2"

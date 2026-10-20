@@ -351,7 +351,7 @@ Other commands read the log too, so deleting it loses more than `undo`:
 ## Environment variables
 
 Every variable tether reads (`TETHER_REV`, `TETHER_JJ` / `TETHER_GIT`,
-`TETHER_PUBLISH_DSN`, `NEON_API_KEY`, the Dolt `*_env` names, the cloud
-credential chains) is in one table in the
+`TETHER_NATIVE`, `TETHER_PUBLISH_DSN`, `NEON_API_KEY`, the Dolt `*_env`
+names, the cloud credential chains) is in one table in the
 [CLI Guide](07-cli.qmd#versions-and-environment), with the `GIT_*`
 variables tether ignores.

@@ -240,10 +240,22 @@ the last read is read again. The first fingerprint of a tree reads every
 byte (~1.5-3 GB/s per core, eight files at a time); every later one is an
 `os.scandir` walk (~4-20 us per file) plus the files whose stat changed.
 
+### Large local trees and the native scanner
+
+With `tether-vcs-native` installed, a local directory's walk, hash cache and
+hashing run in Rust, by the same rules and against the same cache file, so
+either scanner picks up where the other left off. A warm
+`status --snapshot` of 100,000 files takes 0.15 s instead of 1.8 s, and of a
+million 2.1 s instead of 21, in about a quarter of the memory; a first scan
+is 3-4× faster. It is built for Linux and macOS; elsewhere, and with
+`TETHER_NATIVE=0`, the Python scanner does the work. Until it is on PyPI,
+build it from the repository with `uv sync --group native`, which needs a
+Rust toolchain.
+
 ### Content diffs are metadata-only too
 
 Each backend reads manifests, logs or catalog tables, never data. So
 `diff --content` costs about one fingerprint per changed object: two
 manifest reads for Icechunk and Lance, one log walk for Delta, one catalog
 query for DuckLake, one prolly-tree diff for Dolt. Two stored file listings
-diff in pure Python at ~50 ms per 100k paths.
+of 100k paths diff in about 0.2 s, or 40 ms with the native scanner.

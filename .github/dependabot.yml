@@ -1,5 +1,6 @@
 # The workflows' actions are pinned by commit, so Dependabot is what moves
-# them; the lockfile pins every Python dependency the same way.
+# them; the lockfile pins every Python dependency the same way, and
+# native/rust-toolchain.toml the Rust compiler.
 version: 2
 
 updates:
@@ -15,3 +16,16 @@ updates:
     groups:
       python:
         patterns: ["*"]
+
+  - package-ecosystem: "cargo"
+    directory: "/native"
+    schedule:
+      interval: "weekly"
+    groups:
+      rust:
+        patterns: ["*"]
+
+  - package-ecosystem: "rust-toolchain"
+    directory: "/native"
+    schedule:
+      interval: "weekly"

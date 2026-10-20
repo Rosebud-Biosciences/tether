@@ -24,6 +24,31 @@ Tests skip what the machine cannot run rather than fail: the jj-parametrized
 tests need `jj` on `PATH` (CI installs the release binary), and the `publish` /
 `import` tests need PostgreSQL's `pg_ctl` (see the README's "Development").
 
+A change to the native scanner in [`native/`](native/), or to what it mirrors
+in `tether.backends.file`, also has to pass CI's `native` job. That needs
+rustup, which installs the Rust that `native/rust-toolchain.toml` pins on
+first use:
+
+```bash
+(cd native && cargo fmt --check && cargo clippy --all-targets --features python -- -D warnings && cargo test)
+uv sync --all-extras --group native   # builds tether-vcs-native into the environment
+uv run pytest                         # the file backend now scans through it
+```
+
+`tests/test_native.py` runs both scanners on the same trees and requires the
+same states, listings, cache file and errors; `TETHER_NATIVE=0` puts the whole
+suite back on the Python scanner.
+
+Every wheel ships `native/THIRD-PARTY-NOTICES`: the licenses of the crates
+compiled into it. When a crate comes, goes or changes its license text, the
+`native` job fails until the file is regenerated with
+[cargo-about](https://github.com/EmbarkStudios/cargo-about) 0.9.2
+(`cargo install --locked cargo-about@0.9.2`):
+
+```bash
+(cd native && cargo fetch --locked && cargo about generate --features python --frozen --fail about.hbs -o THIRD-PARTY-NOTICES)
+```
+
 ## Changelog
 
 Every user-visible change gets an entry under `[Unreleased]` in
