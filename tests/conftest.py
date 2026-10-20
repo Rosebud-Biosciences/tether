@@ -21,6 +21,12 @@ from pytest_postgresql import factories
 _BIN = os.environ.get("TETHER_TEST_BIN")
 
 
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Start the use-cases story first: the longest test by far, it would be
+    the tail of an `-n auto` run if a worker reached it last."""
+    items.sort(key=lambda item: item.path.name != "test_use_cases.py")
+
+
 # --------------------------------------------------------------------------- #
 # Ephemeral Postgres (publish / import tests)
 # --------------------------------------------------------------------------- #

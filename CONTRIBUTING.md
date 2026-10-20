@@ -16,7 +16,7 @@ uv sync --all-extras
 uv run ruff format --check .
 uv run ruff check .
 uv run ty check
-uv run pytest
+uv run pytest -n auto
 uv sync --all-extras --group docs && uv run great-docs build   # the documentation
 ```
 

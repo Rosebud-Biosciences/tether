@@ -214,7 +214,7 @@ rather than a store that holds the data.
 uv sync --all-extras
 uv run ruff format --check . && uv run ruff check .
 uv run ty check
-uv run pytest
+uv run pytest -n auto
 ```
 
 The `publish` / `import` tests start an ephemeral PostgreSQL cluster through
