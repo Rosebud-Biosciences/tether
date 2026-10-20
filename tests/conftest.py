@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -89,9 +89,13 @@ def _jj_config(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch: pytest.MonkeyPatch, _jj_config: Path) -> None:
+    _test_env(monkeypatch, _jj_config)
+
+
+def _test_env(monkeypatch: pytest.MonkeyPatch, jj_config: Path) -> None:
     if _BIN and os.path.isdir(_BIN) and shutil.which("jj") is None:
         monkeypatch.setenv("PATH", _BIN + os.pathsep + os.environ.get("PATH", ""))
-    monkeypatch.setenv("JJ_CONFIG", str(_jj_config))
+    monkeypatch.setenv("JJ_CONFIG", str(jj_config))
     # git needs an identity to commit, and a CI runner has none configured.
     # Every repository a test makes -- a created store, a clone, a subprocess
     # -- inherits this one, the way jj gets its identity from JJ_CONFIG above.
@@ -165,12 +169,44 @@ def _jj_init(path: Path) -> None:
     subprocess.run(["jj", "git", "init"], cwd=path, check=True, capture_output=True)
 
 
+def _init_env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k != "PYTEST_CURRENT_TEST"}
+
+
+@pytest.fixture(scope="session")
+def _vcs_templates(
+    tmp_path_factory: pytest.TempPathFactory, _jj_config: Path
+) -> Callable[[str], tuple[Path, dict[str, str]]]:
+    """Each VCS's repository, initialized once under the environment `_env`
+    gives every test, with that environment. `vcs_root` copies it for a test
+    in the same environment and initializes in place otherwise: a fresh jj
+    repository keeps no absolute path and tracks nothing yet, so the copy is
+    the repository `init` would have made there."""
+    made: dict[str, tuple[Path, dict[str, str]]] = {}
+
+    def template(kind: str) -> tuple[Path, dict[str, str]]:
+        if kind not in made:
+            path = tmp_path_factory.mktemp(f"{kind}-template")
+            with pytest.MonkeyPatch.context() as mp:
+                _test_env(mp, _jj_config)
+                (_git_init if kind == "git" else _jj_init)(path)
+                made[kind] = path, _init_env()
+        return made[kind]
+
+    return template
+
+
 @pytest.fixture(params=["git", "jj"])
-def vcs_root(request: pytest.FixtureRequest, tmp_path: Path) -> Path:
+def vcs_root(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    _vcs_templates: Callable[[str], tuple[Path, dict[str, str]]],
+) -> Path:
     if shutil.which(request.param) is None:
         pytest.skip(f"{request.param} not on PATH")
-    if request.param == "git":
-        _git_init(tmp_path)
+    template, env = _vcs_templates(request.param)
+    if env != _init_env():
+        (_git_init if request.param == "git" else _jj_init)(tmp_path)
     else:
-        _jj_init(tmp_path)
+        shutil.copytree(template, tmp_path, symlinks=True, dirs_exist_ok=True)
     return tmp_path
