@@ -24,6 +24,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   alive; each took two or three. `status` starts 8 processes instead of 12,
   about 45 ms less on a laptop.
 
+### Fixed
+
+- `status` and `ops` no longer warn that a commit `tether drop` removed is
+  "no longer in VCS history: undone or abandoned outside tether", with
+  advice to `gc` pins `drop` had already released. Only `abandon`'s commits
+  were recognized as tether's own.
+
 ## [0.1.0b7] - 2026-10-09
 
 ### Changed

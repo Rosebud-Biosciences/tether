@@ -6,7 +6,7 @@ with psycopg.connect(os.environ["REGISTRY_DSN"]) as conn:
     conn.execute("create table runs (run_id text, dataset_commit text)")
     conn.execute(
         "insert into runs values ('train-2026-09-14', %s)",
-        ("569de089097300d28ee565b2543db708209fcf3e",),
+        ("8e78d3cb811a673475d671980c31aa3830b3c176",),
     )
     rows = conn.execute(
         """

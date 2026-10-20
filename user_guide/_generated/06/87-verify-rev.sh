@@ -1,1 +1,1 @@
-tether verify --rev 569de0890973 --deep
+tether verify --rev 8e78d3cb811a --deep

@@ -99,6 +99,7 @@ def test_drop_from_the_bookmark_you_are_on(vcs_root: Path) -> None:
     assert repo.workspace.bookmark == "main"
     assert "probe" not in repo.vcs.bookmarks()
     assert commit not in repo.vcs.history_revs()
+    assert repo.vcs_drift() == []  # tether dropped it, not someone behind its back
     assert report.gc_report is not None
     assert report.gc_report.deleted_working_refs == {"db": [fork]}
     assert report.gc_report.unpinned == {"memory": [pin]}
