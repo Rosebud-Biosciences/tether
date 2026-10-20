@@ -166,6 +166,36 @@ def test_lance_racing_absent_forks_create_the_branch_once(tmp_path: Path) -> Non
     assert _rows(uri, name) == [1, 2]  # the winner's write survived the losers
 
 
+def test_lance_lost_create_race_reported_as_an_internal_error_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lance 12 on Linux can tell the loser of a `create_branch` race with an
+    internal error, before the winner's branch is listed (CI flaked on it).
+    A conditional fork refuses; an unconditional one still fails."""
+    from tether.backends.base import ABSENT
+    from tether.errors import RefMovedError
+
+    uri = str(tmp_path / "d.lance")
+    lance.write_dataset(pa.table({"a": [1]}), uri)
+    loc = {"uri": uri}
+    source = LanceBackend().fingerprint(loc, None)
+    name = working_ref_name("d5d5d5d5", "shared")
+
+    def lost(*_args: object, **_kwargs: object) -> None:
+        raise OSError(
+            "Encountered internal error. Please file a bug report at "
+            "https://github.com/lance-format/lance/issues. Clone operation "
+            "should not enter build_manifest., "
+            "rust/lance-table/src/transaction/manifest_build.rs:542:28"
+        )
+
+    monkeypatch.setattr(lance.LanceDataset, "create_branch", lost)
+    with pytest.raises(RefMovedError, match="created by someone else"):
+        LanceBackend().fork(loc, source, name, expected=ABSENT)
+    with pytest.raises(BackendError, match="internal error"):
+        LanceBackend().fork(loc, source, name)
+
+
 @pytest.mark.parametrize("after", range(1, 5))
 @pytest.mark.parametrize("read", ["open", "list"])
 @pytest.mark.parametrize("peer", ["writes", "recreates", "creates"])

@@ -30,6 +30,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   "no longer in VCS history: undone or abandoned outside tether", with
   advice to `gc` pins `drop` had already released. Only `abandon`'s commits
   were recognized as tether's own.
+- A Lance object's first writable `open` on a new bookmark that loses a race
+  with another clone creating the same branch is refused with
+  `RefMovedError` when Lance 12 reports the loss as an internal error, as it
+  is when Lance says "already exists"; it failed with `BackendError`.
 
 ## [0.1.0b7] - 2026-10-09
 
