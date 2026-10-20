@@ -319,6 +319,7 @@ def test_lazy_forking(vcs_root: Path) -> None:
     assert not eager.workspace.pending_forks
 
 
+@pytest.mark.parametrize("vcs_root", ["git"], indirect=True)  # refused before the VCS
 def test_open_missing_object_errors(vcs_root: Path) -> None:
     repo = Repo.init(vcs_root)
     with pytest.raises(ConfigError):
@@ -1593,6 +1594,7 @@ def test_refresh_parses_only_the_manifests_that_changed(
     assert repo.objects["b"].policy.pin == "native"
 
 
+@pytest.mark.parametrize("vcs_root", ["git"], indirect=True)  # the workspace's cache
 @pytest.mark.parametrize("how", ["status", "snapshot", "commit"])
 def test_a_failed_fingerprint_is_cached_as_an_error_not_a_state(
     vcs_root: Path, how: str
@@ -1722,6 +1724,7 @@ def test_one_writer_per_checkout(vcs_root: Path) -> None:
     repo.new(bookmark="work")
 
 
+@pytest.mark.parametrize("vcs_root", ["git"], indirect=True)  # tether's own lock
 def test_threads_sharing_one_repo_take_the_checkout_lock_in_turn(
     vcs_root: Path,
 ) -> None:
@@ -1943,6 +1946,7 @@ def test_diff_before_the_first_commit_shows_everything_added(vcs_root: Path) -> 
     assert {e.key: e.change for e in repo.diff()} == {"db": "added"}
 
 
+@pytest.mark.parametrize("vcs_root", ["git"], indirect=True)  # the store's error
 def test_status_reports_an_unreachable_object_beside_the_rest(vcs_root: Path) -> None:
     """One store that cannot be read labels its object `error`; it does not
     abort the report (nor a fresh workspace's first, snapshotting, status)."""

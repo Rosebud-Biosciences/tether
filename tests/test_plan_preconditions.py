@@ -622,23 +622,8 @@ def _edit_promote(data: dict, edit: str) -> None:
         raise AssertionError(edit)
 
 
-@pytest.mark.parametrize(
-    "edit",
-    [
-        "drop an action",
-        "target_state",
-        "source ref",
-        "fast-forward -> merge",
-        "bookmark_commit",
-        "subset",
-        "precondition expected",
-        "note",
-        "digest removed",
-    ],
-)
-def test_a_saved_promote_plan_edited_anywhere_is_refused(
-    vcs_root: Path, edit: str
-) -> None:
+@pytest.mark.parametrize("vcs_root", ["git"], indirect=True)  # the digest, not the VCS
+def test_a_saved_promote_plan_edited_anywhere_is_refused(vcs_root: Path) -> None:
     """Port of the review's D8: a plan's preconditions were checked, but not
     what they vouch for. Deleting one fast-forward from a saved two-object
     promote plan landed `db` alone and moved main to a commit recording
@@ -656,17 +641,28 @@ def test_a_saved_promote_plan_edited_anywhere_is_refused(
     repo.commit("feat writes")
     plan = repo.plan_promote()
     assert sorted(a.op for a in plan.actions) == ["fast-forward", "fast-forward"]
-    data = json.loads(plan.to_json())
-    _edit_promote(data, edit)
-    edited = Plan.from_dict(data)
     heads = {k: store.system(s).branches["main"] for k, s in systems.items()}
     trunk = repo.vcs.bookmarks()["main"]
 
-    with pytest.raises(StalePlanError, match="edited after it was saved"):
-        repo.apply_promote(edited)
-    assert {k: store.system(s).branches["main"] for k, s in systems.items()} == heads
-    assert repo.vcs.bookmarks()["main"] == trunk
-    assert not [e for e in repo.ops() if e.command == "promote"]
+    for edit in (
+        "drop an action",
+        "target_state",
+        "source ref",
+        "fast-forward -> merge",
+        "bookmark_commit",
+        "subset",
+        "precondition expected",
+        "note",
+        "digest removed",
+    ):
+        data = json.loads(plan.to_json())
+        _edit_promote(data, edit)
+        with pytest.raises(StalePlanError, match="edited after it was saved"):
+            repo.apply_promote(Plan.from_dict(data))
+        moved = {k: store.system(s).branches["main"] for k, s in systems.items()}
+        assert moved == heads, edit
+        assert repo.vcs.bookmarks()["main"] == trunk, edit
+        assert not [e for e in repo.ops() if e.command == "promote"], edit
     # The plan as saved still applies.
     report = repo.apply_promote(Plan.from_json(plan.to_json()))
     assert set(report.fast_forwarded) == {"db", "db2"} and report.trunk_moved
