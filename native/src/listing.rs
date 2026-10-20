@@ -5,8 +5,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use blake2::digest::{Update, VariableOutput};
-use blake2::Blake2bVar;
+use blake2::{Blake2b128, Digest};
 use serde::Deserialize;
 
 /// What "same content" means for one entry: a file's sha256, or the sha256 of
@@ -56,18 +55,14 @@ impl Listing {
 
     /// BLAKE2b-128 over each `(path, token)`, each NUL-terminated.
     pub fn digest(&self) -> String {
-        let mut hasher = Blake2bVar::new(16).expect("16 is a valid BLAKE2b size");
+        let mut hasher = Blake2b128::new();
         for row in &self.rows {
             hasher.update(row.path.as_bytes());
             hasher.update(b"\0");
             hasher.update(row.token.text().as_bytes());
             hasher.update(b"\0");
         }
-        let mut out = [0u8; 16];
-        hasher
-            .finalize_variable(&mut out)
-            .expect("the buffer is the digest size");
-        hex::encode(out)
+        hex::encode(hasher.finalize())
     }
 
     /// The JSON lines a commit stores.
