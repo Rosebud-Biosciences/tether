@@ -68,6 +68,11 @@ jobs:
           tar -xzf /tmp/jj.tar.gz -C /tmp ./jj
           sudo install -m 0755 /tmp/jj /usr/local/bin/jj
           jj --version
+      # pg_ctl, for the publish / import tests and section 7 of the use-cases
+      # story, which skip without it: install PostgreSQL where the runner
+      # image has none (ubuntu-26.04 had none the tests could find).
+      - name: PostgreSQL
+        run: ls /usr/lib/postgresql/*/bin/pg_ctl || { sudo apt-get update -q && sudo apt-get install -y -q postgresql; }
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
@@ -120,6 +125,10 @@ jobs:
           tar -xzf /tmp/jj.tar.gz -C /tmp ./jj
           sudo install -m 0755 /tmp/jj /usr/local/bin/jj
           jj --version
+      - name: PostgreSQL
+        # As in `test`; on macOS the Postgres tests skip.
+        if: runner.os == 'Linux'
+        run: ls /usr/lib/postgresql/*/bin/pg_ctl || { sudo apt-get update -q && sudo apt-get install -y -q postgresql; }
       - name: Rust format, lint and unit tests
         working-directory: native
         run: |

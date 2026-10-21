@@ -31,26 +31,30 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 # Ephemeral Postgres (publish / import tests)
 # --------------------------------------------------------------------------- #
 def _find_pg_ctl() -> str | None:
-    """Locate ``pg_ctl`` on PATH or in the usual install dirs (Homebrew, Debian).
+    """Locate ``pg_ctl`` on PATH or in the usual install dirs (Homebrew, Debian),
+    the newest major version first.
 
-    ``None`` keeps collection working when Postgres is absent; tests that need
-    it skip through ``pg_dsn`` instead of failing at import.
+    Any major version, not a list of them: the next release would fall off a
+    list, and every test that needs Postgres would skip. ``None`` keeps
+    collection working when Postgres is absent; tests that need it skip
+    through ``pg_dsn`` instead of failing at import.
     """
     found = shutil.which("pg_ctl")
     if found:
         return found
     candidates = [
-        "/opt/homebrew/opt/postgresql@17/bin/pg_ctl",
-        "/opt/homebrew/opt/postgresql@16/bin/pg_ctl",
-        "/usr/local/opt/postgresql@16/bin/pg_ctl",
-        "/usr/lib/postgresql/17/bin/pg_ctl",
-        "/usr/lib/postgresql/16/bin/pg_ctl",
-        "/usr/lib/postgresql/15/bin/pg_ctl",
+        *Path("/opt/homebrew/opt").glob("postgresql@*/bin/pg_ctl"),
+        *Path("/usr/local/opt").glob("postgresql@*/bin/pg_ctl"),
+        *Path("/usr/lib/postgresql").glob("*/bin/pg_ctl"),
     ]
-    for candidate in candidates:
-        if Path(candidate).exists():
-            return candidate
-    return None
+    newest = max(candidates, key=_pg_major, default=None)
+    return str(newest) if newest else None
+
+
+def _pg_major(pg_ctl: Path) -> int:
+    """17 for ``.../postgresql@17/bin/pg_ctl`` and ``.../postgresql/17/bin/pg_ctl``."""
+    version = pg_ctl.parts[-3].rsplit("@", 1)[-1]
+    return int(version) if version.isdigit() else 0
 
 
 _PG_CTL = _find_pg_ctl()
