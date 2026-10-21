@@ -380,3 +380,72 @@ def test_attach_sql_quotes_and_options() -> None:
         "(DATA_PATH 's3://b/p/', SNAPSHOT_VERSION 7, READ_ONLY)"
     )
     assert attach_sql("ducklake:m", "x", read_only=False) == "ATTACH 'ducklake:m' AS x"
+
+
+class _RefusingConnection:
+    """A connection whose every ``ATTACH`` fails with ``error``."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def execute(self, sql: str) -> _RefusingConnection:
+        if sql.startswith("ATTACH"):
+            raise self.error
+        return self
+
+    def close(self) -> None:
+        pass
+
+
+_ATTACH_FAILED = 'Failed to attach DuckLake MetaData "m" at path + "lake.ducklake"'
+
+
+@pytest.mark.parametrize(
+    ("error", "hint"),
+    [
+        pytest.param(
+            duckdb.BinderException(
+                f"Binder Error: {_ATTACH_FAILED}Unique file handle conflict: "
+                'Cannot attach "m" - the database file "lake.ducklake" is '
+                'already attached by database "w"'
+            ),
+            "can be attached once per process",
+            id="attached-elsewhere",
+        ),
+        pytest.param(
+            duckdb.IOException(
+                f"IO Error: {_ATTACH_FAILED}Trying to read a database file with "
+                "version number 69, but we can only read versions between 64 "
+                "and 68.\nThe database file was created with a newer version "
+                "of DuckDB."
+            ),
+            "a newer DuckDB has written this DuckDB-file catalog",
+            id="created-by-newer",
+        ),
+        pytest.param(
+            duckdb.InvalidInputException(
+                f'Invalid Input Error: {_ATTACH_FAILED}Error opening "lake.ducklake":'
+                " cannot initialize database with storage version 7 - which is "
+                "lower than what the database itself uses (69). The storage "
+                "version of an existing database cannot be lowered."
+            ),
+            "a newer DuckDB has written this DuckDB-file catalog",
+            id="written-by-newer",
+        ),
+    ],
+)
+def test_attach_errors_say_what_to_do(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception, hint: str
+) -> None:
+    """Each message is what DuckDB 1.5 says, which leaves out the remedy: a
+    catalog file a newer DuckDB wrote stays unreadable here until duckdb is
+    upgraded. `open` gave no hint at all."""
+    monkeypatch.setattr(
+        DuckLakeBackend, "_connect", lambda self: _RefusingConnection(error)
+    )
+    b = DuckLakeBackend()
+    loc = _lake(tmp_path, "lake")
+    with pytest.raises(BackendError, match=hint):
+        b.fingerprint(loc, None)
+    with pytest.raises(BackendError, match=hint):
+        b.open(loc, None, read_only=True)

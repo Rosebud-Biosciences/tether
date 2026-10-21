@@ -119,6 +119,28 @@ def attach_sql(
     return f"ATTACH {_quote(metadata)} AS {alias}{suffix}"
 
 
+def _attach_hint(exc: Exception) -> str:
+    """What to do about a failed ``ATTACH``, where DuckDB's message says why."""
+    message = str(exc)
+    if "already attached" in message:
+        return (
+            " (a DuckDB-file catalog can be attached once per process; "
+            "close open handles/connections or use a Postgres/SQLite "
+            "metadata catalog)"
+        )
+    # Created by a newer DuckDB, or written by one since: DuckDB 2.0's ducklake
+    # extension moves a 1.x catalog file onto its storage format at the first
+    # write, even on the DuckLake 1.0 spec.
+    if "newer version of DuckDB" in message or "cannot be lowered" in message:
+        import duckdb
+
+        return (
+            " (a newer DuckDB has written this DuckDB-file catalog, which "
+            f"DuckDB {duckdb.__version__} cannot read: upgrade duckdb)"
+        )
+    return ""
+
+
 @wrap_library_errors
 class DuckLakeBackend(ObjectBackend):
     kind = "ducklake"
@@ -214,16 +236,9 @@ class DuckLakeBackend(ObjectBackend):
                     where = (
                         f" at snapshot {snapshot_id}" if snapshot_id is not None else ""
                     )
-                    hint = (
-                        " (a DuckDB-file catalog can be attached once per process; "
-                        "close open handles/connections or use a Postgres/SQLite "
-                        "metadata catalog)"
-                        if "already attached" in str(exc)
-                        else ""
-                    )
                     raise BackendError(
                         f"cannot attach ducklake catalog {metadata}{where}: "
-                        f"{exc}{hint}",
+                        f"{exc}{_attach_hint(exc)}",
                         kind="ducklake",
                     ) from exc
                 yield con, alias
@@ -368,7 +383,8 @@ class DuckLakeBackend(ObjectBackend):
         except duckdb.Error as exc:
             con.close()
             raise BackendError(
-                f"cannot attach ducklake catalog {metadata}: {exc}", kind="ducklake"
+                f"cannot attach ducklake catalog {metadata}: {exc}{_attach_hint(exc)}",
+                kind="ducklake",
             ) from exc
         if sid is None:
             sid = max(self._snapshots(con, alias))

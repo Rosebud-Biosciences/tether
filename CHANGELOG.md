@@ -23,6 +23,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and one more the recorded commits `status` and `ops` check are still
   alive; each took two or three. `status` starts 8 processes instead of 12,
   about 45 ms less on a laptop.
+- A DuckLake catalog that a newer DuckDB has written fails to attach with a
+  hint to upgrade `duckdb`, and `open` now gives the same hints as every
+  other command. DuckDB 2.0 moves a DuckDB-file catalog onto a storage
+  format 1.x cannot read at its first write, even on the DuckLake 1.0 spec:
+  upgrade the `duckdb` tether runs with before, or with, any writer.
 
 ### Fixed
 
