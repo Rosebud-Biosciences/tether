@@ -255,7 +255,7 @@ MySQL catalog with an object-store `data_path`.
 | State | `snapshot_id`, `snapshot_time_us` (epoch microseconds; a recreated catalog verifies as drifted) |
 | Pin / fork | none: DuckLake has no tags or branches. `ducklake_expire_snapshots` bounds how long a snapshot stays readable. |
 | Handle | `DuckLakeHandle(metadata, alias, connection, snapshot_id, attach_sql, data_path, table)`: a DuckDB connection with the catalog attached read-only (at `SNAPSHOT_VERSION` for a recorded state); `table_ref()` gives `alias.table`; `close()` / `with handle:` detaches |
-| Diff | `tables`: per-table created/dropped/altered/inserted/deleted from the snapshots' `changes` maps, with row counts from `ducklake_table_changes` for tables that still exist |
+| Diff | `tables`: per-table created/dropped/altered/inserted/deleted from the snapshots' `changes` maps, with row counts from `ducklake_table_changes` for tables that still exist. A table is named by its path, a part that is not a plain identifier double-quoted: `sales.europe.orders`, `"a.child".t` |
 | Notes | a DuckDB-file metadata catalog can be attached only once per process: operations attach/detach per call (serialized per catalog), and an open handle or your own writer connection in the same process blocks `status`. Postgres/SQLite/MySQL catalogs have no such limit. |
 
 ## `dolt`: Dolt databases
