@@ -34,6 +34,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with another clone creating the same branch is refused with
   `RefMovedError` when Lance 12 reports the loss as an internal error, as it
   is when Lance says "already exists"; it failed with `BackendError`.
+- `status --snapshot` labels a changed `--file immutable` object `error`,
+  with the reason on stderr, and still reports every other object; it used
+  to abort the whole report at the first such object. It exits 1 as before,
+  and `snapshot`, `commit` and `pull` still refuse the change. The failure is
+  cached like any other, so a later `status` without `--snapshot` keeps
+  saying `error` until the object is re-registered.
 
 ## [0.1.0b7] - 2026-10-09
 

@@ -360,7 +360,8 @@ a changed immutable file, a pin that does not resolve. On a quiet night:
 
 **A raw file overwritten in place.** The instrument re-exports one well of a
 plate registered as `file = "immutable"` (the default). It is the *bytes*
-that count, not the timestamp; `status` stops at the snapshot and exits 1:
+that count, not the timestamp; `status` labels the plate `error`, reports the
+rest of the dataset as usual, and exits 1:
 
 {{< include _generated/06/42-overwrite.sh >}}
 

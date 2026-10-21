@@ -1237,6 +1237,28 @@ def test_status_labels_an_unreadable_object_and_exits_1(
         default_store().deleted.discard(systems["bad"])
 
 
+def test_status_labels_a_changed_immutable_object_and_exits_1(
+    vcs_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It once aborted the whole report, hiding every other object."""
+    monkeypatch.chdir(vcs_root)
+    repo = Repo.init(vcs_root)
+    data = vcs_root / "upload.txt"
+    data.write_text("original", encoding="utf-8")
+    repo.add("raw", "file", {"uri": str(data)})
+    system = f"sys-{uuid.uuid4().hex[:8]}"
+    default_store().system(system)
+    repo.add("ok", "memory", {"system": system, "branch": "main"})
+    repo.commit("baseline")
+
+    data.write_text("overwritten out of band", encoding="utf-8")
+    r = runner.invoke(app, ["status", "--snapshot"])
+    assert r.exit_code == 1, r.output
+    assert "error  raw" in r.stdout and "clean  ok" in r.stdout
+    assert "raw:" in r.stderr and "immutable object 'raw' changed" in r.stderr
+    assert runner.invoke(app, ["snapshot"]).exit_code == 1
+
+
 @pytest.mark.parametrize("fanout", [["status", "--snapshot"], ["snapshot"]])
 def test_a_cached_status_keeps_the_last_snapshots_errors_and_exit_code(
     vcs_root: Path, monkeypatch: pytest.MonkeyPatch, fanout: list[str]
