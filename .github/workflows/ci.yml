@@ -40,6 +40,9 @@ jobs:
         run: uv run ty check
 
   test:
+    # The ruleset on main requires `test (3.11)`, `test (3.12)` and
+    # `test (3.13)` by name, so the legs on the locked DuckDB keep them.
+    name: ${{ matrix.duckdb == 'locked' && format('test ({0})', matrix.python-version) || format('test ({0}, DuckDB {1})', matrix.python-version, matrix.duckdb) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -48,12 +51,18 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
-        # Coverage on one leg, with icechunk 2.x (Python 3.12+): under 1.x the
-        # store-lifecycle tests and the use-cases story skip. Only 1.x's
-        # fallback, for an icechunk without the lifecycle API, goes unmeasured.
+        duckdb: ["locked"]
         include:
+          # Coverage on one leg, with icechunk 2.x (Python 3.12+): under 1.x the
+          # store-lifecycle tests and the use-cases story skip. Only 1.x's
+          # fallback, for an icechunk without the lifecycle API, goes unmeasured.
           - python-version: "3.13"
+            duckdb: "locked"
             coverage: true
+          # DuckDB 2 over the locked 1.5: only 2 makes DuckLake 1.1 catalogs,
+          # and the tests of their nested schemas skip on the other legs.
+          - python-version: "3.13"
+            duckdb: "2.0.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # jj has no official setup action; install the release binary so the
@@ -78,12 +87,18 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-extras --python ${{ matrix.python-version }}
+      # `uv run --no-sync` from here on, or uv would put the locked one back.
+      - name: Use DuckDB ${{ matrix.duckdb }}
+        if: ${{ matrix.duckdb != 'locked' }}
+        run: |
+          uv pip install "duckdb==${{ matrix.duckdb }}"
+          uv run --no-sync python -c "import duckdb; assert duckdb.__version__ == '${{ matrix.duckdb }}', duckdb.__version__"
       - name: pytest
         if: ${{ !matrix.coverage }}
-        run: uv run pytest -n auto
+        run: uv run --no-sync pytest -n auto
       - name: pytest with coverage
         if: ${{ matrix.coverage }}
-        run: uv run pytest -n auto --cov=tether --cov-report=xml --cov-report=term-missing:skip-covered
+        run: uv run --no-sync pytest -n auto --cov=tether --cov-report=xml --cov-report=term-missing:skip-covered
       - name: Upload coverage
         if: ${{ matrix.coverage }}
         # Pushes to a branch are not "tokenless" uploads (only fork PRs are),
