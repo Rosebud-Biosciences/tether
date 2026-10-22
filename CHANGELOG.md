@@ -14,6 +14,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `status --snapshot` of a million files takes 2 s instead of 21, in about a
   quarter of the memory, with the same states, listings and cache file.
   `TETHER_NATIVE=0` turns it off.
+- `tether new --defer-record` (or `[new] record = "defer"`) leaves
+  `pin = "record"` objects for the first writable `open` too, instead of
+  branching every one during `new`: a PR preview that writes a few of many
+  stores no longer needs write access to, or leaves a branch in, the rest.
+  Until the fork nothing of tether's holds such an object's recorded state;
+  `new` warns per object whether its upstream branch still does or only the
+  store's retention, `status` repeats it, and reads fail once the store
+  expires the state. `status --json` lists them as `unprotected`.
 
 ### Changed
 

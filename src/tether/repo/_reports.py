@@ -149,6 +149,9 @@ class StatusReport:
     vcs_drift: list[VcsDrift] = field(default_factory=list)
     """Dataset commits this workspace made that left VCS history behind
     tether's back (see `Repo.vcs_drift`)."""
+    unprotected: list[str] = field(default_factory=list)
+    """Objects with a deferred fork and no pin: only the store's retention
+    keeps their recorded state (see `Repo.unprotected_keys`)."""
     fresh: bool = True
     """Whether the states were fingerprinted by this call (`False`: the cached
     snapshot from `snapshot_at` was reused)."""

@@ -22,7 +22,7 @@ tether snapshot [KEY...]
 tether pull [BOOKMARK] [--key KEY]... [-m MESSAGE]
 tether commit [KEY...] -m MESSAGE [--no-vcs] [--strict] [--force] [--no-snapshot] [--dry-run | --plan FILE]
 tether commit --from-plan FILE [KEY...] [-m MESSAGE] [--no-vcs]
-tether new [REV] [-b NAME] [--shared] [--keep] [--eager | --lazy] [--discard | --adopt] [--dry-run | --plan FILE | --from-plan FILE]
+tether new [REV] [-b NAME] [--shared] [--keep] [--eager | --lazy] [--defer-record | --no-defer-record] [--discard | --adopt] [--dry-run | --plan FILE | --from-plan FILE]
 tether open KEY [-r REV] [--read-only | --writable] [--with-password]
 tether restore KEY... (--from REV | --at REF) [--discard] [--dry-run | --plan FILE | --from-plan FILE]
 tether promote [KEY]... [-r REV] [--strategy auto|ff|merge] [-m MESSAGE] [--dry-run | --plan FILE | --from-plan FILE]
@@ -329,7 +329,8 @@ working ref per Forkable object:
 A bookmark another live checkout works on is refused unless `--shared`. On
 the trunk each working ref is the upstream branch (`trunk`); elsewhere it
 is `tether.ws.<dataset>.<bookmark>`, created by the first writable `open`
-(`defer-fork`) or now with `--eager`
+(`defer-fork`) or now with `--eager`. A `pin = "record"` object's is created
+now either way, unless `--defer-record`
 ([Lazy or eager](04-branching-and-writing.qmd#lazy-or-eager)).
 
 A branch already at the pin is kept (`reuse`); another existing branch is

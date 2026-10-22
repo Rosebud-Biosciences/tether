@@ -1674,6 +1674,20 @@ class RepoCore:
                 stale.append(key)
         return stale
 
+    def unprotected_keys(self) -> list[str]:
+        """Objects whose fork is deferred though they have no pin: `new
+        --defer-record`, or an interrupted `new`, left a `pin = "record"`
+        object with neither a native ref nor a branch, so only the store's
+        retention keeps its recorded state -- and reading it at that state,
+        as well as the fork, fails once the store expires it."""
+        return sorted(
+            key
+            for key in self.workspace.pending_forks
+            if (m := self.objects.get(key)) is not None
+            and m.pin is None
+            and m.state is not None
+        )
+
     def is_stale(self) -> bool:
         """Whether any forked object's manifest changed underneath this workspace.
 
