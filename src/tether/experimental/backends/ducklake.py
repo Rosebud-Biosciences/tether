@@ -25,7 +25,9 @@ scope the handle.
 from __future__ import annotations
 
 import contextlib
+import csv
 import hashlib
+import re
 import threading
 from collections.abc import Generator
 from typing import Any
@@ -55,9 +57,27 @@ _CHANGES_SQL = (
     "SELECT snapshot_id, changes FROM ducklake_snapshots('{alias}') "
     "WHERE snapshot_id > {lo} AND snapshot_id <= {hi} ORDER BY snapshot_id"
 )
-# Table ids -> (schema, name), including dropped tables (history is kept).
+# Table ids -> path (the schema's parts, then the table's name), including
+# dropped tables (history is kept). The parts stay apart because a part may
+# hold a dot: `a.child.t` and `"a.child".t` are two tables. DuckLake 1.1 nests
+# schemas: a row names only its last part and points at its parent, so the
+# path is rebuilt from the chain. 1.0 catalogs have no `parent_schema_id`,
+# and take the flat query.
+_NESTED_TABLES_SQL = (
+    "WITH RECURSIVE paths (schema_id, path) AS ("
+    "SELECT schema_id, [schema_name] "
+    "FROM __ducklake_metadata_{alias}.ducklake_schema "
+    "WHERE parent_schema_id IS NULL "
+    "UNION ALL "
+    "SELECT s.schema_id, list_append(p.path, s.schema_name) "
+    "FROM __ducklake_metadata_{alias}.ducklake_schema s "
+    "JOIN paths p ON s.parent_schema_id = p.schema_id) "
+    "SELECT t.table_id, list_append(p.path, t.table_name) "
+    "FROM __ducklake_metadata_{alias}.ducklake_table t "
+    "JOIN paths p USING (schema_id)"
+)
 _TABLES_SQL = (
-    "SELECT t.table_id, s.schema_name, t.table_name "
+    "SELECT t.table_id, [s.schema_name, t.table_name] "
     "FROM __ducklake_metadata_{alias}.ducklake_table t "
     "JOIN __ducklake_metadata_{alias}.ducklake_schema s USING (schema_id)"
 )
@@ -66,6 +86,9 @@ _ROW_CHANGES_SQL = (
     "'{alias}', {schema}, {table}, {lo}, {hi}) GROUP BY 1"
 )
 _MAX_ROW_COUNTED_TABLES = 25
+# A name part DuckDB can write without quotes (it also quotes keywords; a label
+# need only be unambiguous).
+_PLAIN_PART = re.compile(r"[A-Za-z0-9_]+")
 
 
 def _quote(value: str) -> str:
@@ -94,6 +117,28 @@ def attach_sql(
         options.append("READ_ONLY")
     suffix = f" ({', '.join(options)})" if options else ""
     return f"ATTACH {_quote(metadata)} AS {alias}{suffix}"
+
+
+def _attach_hint(exc: Exception) -> str:
+    """What to do about a failed ``ATTACH``, where DuckDB's message says why."""
+    message = str(exc)
+    if "already attached" in message:
+        return (
+            " (a DuckDB-file catalog can be attached once per process; "
+            "close open handles/connections or use a Postgres/SQLite "
+            "metadata catalog)"
+        )
+    # Created by a newer DuckDB, or written by one since: DuckDB 2.0's ducklake
+    # extension moves a 1.x catalog file onto its storage format at the first
+    # write, even on the DuckLake 1.0 spec.
+    if "newer version of DuckDB" in message or "cannot be lowered" in message:
+        import duckdb
+
+        return (
+            " (a newer DuckDB has written this DuckDB-file catalog, which "
+            f"DuckDB {duckdb.__version__} cannot read: upgrade duckdb)"
+        )
+    return ""
 
 
 @wrap_library_errors
@@ -191,16 +236,9 @@ class DuckLakeBackend(ObjectBackend):
                     where = (
                         f" at snapshot {snapshot_id}" if snapshot_id is not None else ""
                     )
-                    hint = (
-                        " (a DuckDB-file catalog can be attached once per process; "
-                        "close open handles/connections or use a Postgres/SQLite "
-                        "metadata catalog)"
-                        if "already attached" in str(exc)
-                        else ""
-                    )
                     raise BackendError(
                         f"cannot attach ducklake catalog {metadata}{where}: "
-                        f"{exc}{hint}",
+                        f"{exc}{_attach_hint(exc)}",
                         kind="ducklake",
                     ) from exc
                 yield con, alias
@@ -244,12 +282,7 @@ class DuckLakeBackend(ObjectBackend):
     ) -> list[HistoryEntry]:
         start = ref if ref is not None else base_at(locator)
         with self._attached(locator) as (con, alias):
-            names: dict[str, tuple[str, str]] = {}
-            with contextlib.suppress(Exception):
-                for tid, schema, name in con.execute(
-                    _TABLES_SQL.format(alias=alias)
-                ).fetchall():
-                    names[str(tid)] = (str(schema), str(name))
+            names, _ = _table_names(con, alias)
             rows = con.execute(
                 "SELECT snapshot_id, epoch_us(snapshot_time), changes "
                 f"FROM ducklake_snapshots('{alias}') ORDER BY snapshot_id DESC"
@@ -260,7 +293,10 @@ class DuckLakeBackend(ObjectBackend):
                 continue
             parts = []
             for kind, values in dict(changes or {}).items():
-                labels = sorted(_table_label(str(v), names) for v in values)
+                if str(kind).startswith(("tables_", "inlined_")):
+                    labels = sorted(_label(_table_path(str(v), names)) for v in values)
+                else:
+                    labels = sorted(map(str, values))
                 parts.append(f"{_describe({str(kind)})}: {', '.join(labels)}")
             entries.append(
                 HistoryEntry(
@@ -347,7 +383,8 @@ class DuckLakeBackend(ObjectBackend):
         except duckdb.Error as exc:
             con.close()
             raise BackendError(
-                f"cannot attach ducklake catalog {metadata}: {exc}", kind="ducklake"
+                f"cannot attach ducklake catalog {metadata}: {exc}{_attach_hint(exc)}",
+                kind="ducklake",
             ) from exc
         if sid is None:
             sid = max(self._snapshots(con, alias))
@@ -388,13 +425,8 @@ class DuckLakeBackend(ObjectBackend):
         if sb < sa:
             out.note = "b is older than a"
         with self._attached(locator) as (con, alias):
-            names: dict[str, tuple[str, str]] = {}
-            with contextlib.suppress(Exception):  # metadata layout may differ
-                for tid, schema, name in con.execute(
-                    _TABLES_SQL.format(alias=alias)
-                ).fetchall():
-                    names[str(tid)] = (str(schema), str(name))
-            per_table: dict[str, set[str]] = {}
+            names, nests = _table_names(con, alias)
+            per_table: dict[tuple[str, ...], set[str]] = {}
             other: dict[str, set[str]] = {}
             rows = con.execute(
                 _CHANGES_SQL.format(alias=alias, lo=lo, hi=hi)
@@ -405,16 +437,17 @@ class DuckLakeBackend(ObjectBackend):
                         other.setdefault(str(kind), set()).update(map(str, values))
                         continue
                     for value in values:
-                        label = _table_label(str(value), names)
-                        per_table.setdefault(label, set()).add(str(kind))
+                        path = _table_path(str(value), names)
+                        per_table.setdefault(path, set()).add(str(kind))
             counted = 0
-            for label in sorted(per_table):
-                kinds = per_table[label]
+            for path in sorted(per_table, key=_label):
+                kinds = per_table[path]
+                label = _label(path)
                 if "tables_dropped" in kinds:
                     out.add(label, "removed", "dropped")
                     continue
                 change = "added" if "tables_created" in kinds else "modified"
-                detail = self._row_counts(con, alias, label, names, lo, hi, kinds)
+                detail = self._row_counts(con, alias, path, nests, lo, hi, kinds)
                 if detail is not None:
                     counted += 1
                 if counted > _MAX_ROW_COUNTED_TABLES:
@@ -428,8 +461,8 @@ class DuckLakeBackend(ObjectBackend):
         self,
         con: Any,
         alias: str,
-        label: str,
-        names: dict[str, tuple[str, str]],
+        path: tuple[str, ...],
+        nests: bool,
         lo: int,
         hi: int,
         kinds: set[str],
@@ -441,15 +474,17 @@ class DuckLakeBackend(ObjectBackend):
             "inlined_delete",
         }:
             return None
-        if "." not in label:
+        if len(path) < 2:  # an id the catalog does not name
             return None
-        schema, table = label.split(".", 1)
+        # A 1.1 catalog reads the schema as a path, in which a part holding a dot
+        # is quoted (`"a.child"`); a 1.0 catalog takes the name as it is.
+        schema = ".".join(map(_ident, path[:-1])) if nests else ".".join(path[:-1])
         try:
             rows = con.execute(
                 _ROW_CHANGES_SQL.format(
                     alias=alias,
                     schema=_quote(schema),
-                    table=_quote(table),
+                    table=_quote(path[-1]),
                     lo=lo + 1,
                     hi=hi,
                 )
@@ -479,11 +514,40 @@ class DuckLakeBackend(ObjectBackend):
         return ", ".join(parts) or None
 
 
-def _table_label(value: str, names: dict[str, tuple[str, str]]) -> str:
+def _table_names(con: Any, alias: str) -> tuple[dict[str, tuple[str, ...]], bool]:
+    """Table id -> path, and whether the catalog nests schemas (DuckLake 1.1).
+
+    ``({}, False)`` if the metadata layout is unknown.
+    """
+    import duckdb
+
+    for nests, sql in ((True, _NESTED_TABLES_SQL), (False, _TABLES_SQL)):
+        try:
+            rows = con.execute(sql.format(alias=alias)).fetchall()
+        except duckdb.Error:
+            continue
+        return {str(tid): tuple(map(str, path)) for tid, path in rows}, nests
+    return {}, False
+
+
+def _table_path(value: str, names: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
+    """The table a change names: an id the catalog knows, or else the name
+    DuckLake writes for a created table. That name double-quotes a part that
+    needs it (`"a.child".t`), which is CSV quoting with `.` between fields."""
     if value in names:
-        schema, name = names[value]
-        return f"{schema}.{name}"
-    return value  # already a qualified name (tables_created) or unknown id
+        return names[value]
+    return tuple(next(csv.reader([value], delimiter=".", quotechar='"')))
+
+
+def _label(path: tuple[str, ...]) -> str:
+    """``schema.table``, double-quoting a part that is not a plain identifier."""
+    return ".".join(map(_ident, path))
+
+
+def _ident(part: str) -> str:
+    if _PLAIN_PART.fullmatch(part):
+        return part
+    return '"' + part.replace('"', '""') + '"'
 
 
 def _describe(kinds: set[str]) -> str:

@@ -33,6 +33,9 @@ try:
 except duckdb.Error as _exc:  # pragma: no cover - env dependent
     pytest.skip(f"ducklake extension unavailable: {_exc}", allow_module_level=True)
 
+# DuckLake 1.1, the first spec with nested schemas, needs DuckDB 2.0.
+_NESTED_SCHEMAS = int(duckdb.__version__.split(".")[0]) >= 2
+
 
 def _lake(tmp: Path, name: str) -> Locator:
     return {
@@ -187,6 +190,87 @@ def test_ducklake_diff_per_table(tmp_path: Path) -> None:
         b.fingerprint(dict(loc, at="999"), None)
 
 
+def test_ducklake_tables_whose_names_join_alike_stay_apart(tmp_path: Path) -> None:
+    """`x."y.z"` and `"x.y".z` both joined to `x.y.z`: the diff showed one
+    table, with the row counts of one of them."""
+    b = DuckLakeBackend()
+    loc = _lake(tmp_path, "lake")
+    _sql(loc, "CREATE TABLE w.t (a INTEGER)")
+    s1 = b.fingerprint(loc, None)
+    _sql(
+        loc,
+        "CREATE SCHEMA w.x",
+        'CREATE TABLE w.x."y.z" (a INTEGER)',
+        'CREATE SCHEMA w."x.y"',
+        'CREATE TABLE w."x.y".z (a INTEGER)',
+        'CREATE TABLE w.x."it""s" (a INTEGER)',
+        'INSERT INTO w.x."y.z" SELECT range FROM range(2)',
+        'INSERT INTO w."x.y".z SELECT range FROM range(3)',
+        'INSERT INTO w.x."it""s" SELECT range FROM range(4)',
+    )
+    s2 = b.fingerprint(loc, None)
+    tables = [e for e in b.diff(loc, s1, s2).entries if e.path != "schemas_created"]
+    assert [(e.path, e.change, e.detail) for e in tables] == [
+        ('"x.y".z', "added", "+3 rows, created"),
+        ('x."it""s"', "added", "+4 rows, created"),
+        ('x."y.z"', "added", "+2 rows, created"),
+    ]
+    _sql(loc, 'INSERT INTO w."x.y".z VALUES (9)')
+    d = b.diff(loc, s2, b.fingerprint(loc, None))
+    assert [(e.path, e.detail) for e in d.entries] == [('"x.y".z', "+1 rows")]
+    assert b.history(loc, None, 1)[0].message == 'rows inserted: "x.y".z'
+
+
+@pytest.mark.skipif(not _NESTED_SCHEMAS, reason="nested schemas need DuckDB 2.0")
+def test_ducklake_nested_schema_tables_are_named_by_their_path(
+    tmp_path: Path,
+) -> None:
+    """DuckLake 1.1 names a nested schema by its last part (`europe`), so a
+    table in it was reported as `europe.orders` without row counts -- and a
+    second time, as `sales.europe.orders`, when the range also created it.
+    Joined back with bare dots, the nested `a.child.t` and the top-level
+    `"a.child".t` were then one table."""
+    b = DuckLakeBackend()
+    loc = _lake(tmp_path, "lake")
+    _sql(loc, "CREATE TABLE w.t (a INTEGER)")
+    s1 = b.fingerprint(loc, None)
+    _sql(
+        loc,
+        "CREATE SCHEMA w.sales",
+        "CREATE SCHEMA w.sales.europe",
+        "CREATE TABLE w.sales.europe.orders (id INTEGER)",
+        "INSERT INTO w.sales.europe.orders SELECT range FROM range(5)",
+        "CREATE SCHEMA w.a",
+        "CREATE SCHEMA w.a.child",
+        'CREATE SCHEMA w."a.child"',
+        "CREATE TABLE w.a.child.t (a INTEGER)",
+        'CREATE TABLE w."a.child".t (a INTEGER)',
+    )
+    s2 = b.fingerprint(loc, None)
+    d = b.diff(loc, s1, s2)
+    assert [(e.path, e.change, e.detail) for e in d.entries] == [
+        ('"a.child".t', "added", "created"),
+        ("a.child.t", "added", "created"),
+        ("sales.europe.orders", "added", "+5 rows, created"),
+        (
+            "schemas_created",
+            "modified",
+            '"a.child", a, a.child, sales, sales.europe',
+        ),
+    ]
+    _sql(
+        loc,
+        "INSERT INTO w.a.child.t SELECT range FROM range(2)",
+        'INSERT INTO w."a.child".t SELECT range FROM range(3)',
+    )
+    d = b.diff(loc, s2, b.fingerprint(loc, None))
+    assert [(e.path, e.change, e.detail) for e in d.entries] == [
+        ('"a.child".t', "modified", "+3 rows"),
+        ("a.child.t", "modified", "+2 rows"),
+    ]
+    assert b.history(loc, None, 1)[0].message == 'rows inserted: "a.child".t'
+
+
 def test_relative_metadata_path_is_stored_absolute(
     vcs_root: Path,
     tmp_path_factory: pytest.TempPathFactory,
@@ -296,3 +380,72 @@ def test_attach_sql_quotes_and_options() -> None:
         "(DATA_PATH 's3://b/p/', SNAPSHOT_VERSION 7, READ_ONLY)"
     )
     assert attach_sql("ducklake:m", "x", read_only=False) == "ATTACH 'ducklake:m' AS x"
+
+
+class _RefusingConnection:
+    """A connection whose every ``ATTACH`` fails with ``error``."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def execute(self, sql: str) -> _RefusingConnection:
+        if sql.startswith("ATTACH"):
+            raise self.error
+        return self
+
+    def close(self) -> None:
+        pass
+
+
+_ATTACH_FAILED = 'Failed to attach DuckLake MetaData "m" at path + "lake.ducklake"'
+
+
+@pytest.mark.parametrize(
+    ("error", "hint"),
+    [
+        pytest.param(
+            duckdb.BinderException(
+                f"Binder Error: {_ATTACH_FAILED}Unique file handle conflict: "
+                'Cannot attach "m" - the database file "lake.ducklake" is '
+                'already attached by database "w"'
+            ),
+            "can be attached once per process",
+            id="attached-elsewhere",
+        ),
+        pytest.param(
+            duckdb.IOException(
+                f"IO Error: {_ATTACH_FAILED}Trying to read a database file with "
+                "version number 69, but we can only read versions between 64 "
+                "and 68.\nThe database file was created with a newer version "
+                "of DuckDB."
+            ),
+            "a newer DuckDB has written this DuckDB-file catalog",
+            id="created-by-newer",
+        ),
+        pytest.param(
+            duckdb.InvalidInputException(
+                f'Invalid Input Error: {_ATTACH_FAILED}Error opening "lake.ducklake":'
+                " cannot initialize database with storage version 7 - which is "
+                "lower than what the database itself uses (69). The storage "
+                "version of an existing database cannot be lowered."
+            ),
+            "a newer DuckDB has written this DuckDB-file catalog",
+            id="written-by-newer",
+        ),
+    ],
+)
+def test_attach_errors_say_what_to_do(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception, hint: str
+) -> None:
+    """Each message is what DuckDB 1.5 says, which leaves out the remedy: a
+    catalog file a newer DuckDB wrote stays unreadable here until duckdb is
+    upgraded. `open` gave no hint at all."""
+    monkeypatch.setattr(
+        DuckLakeBackend, "_connect", lambda self: _RefusingConnection(error)
+    )
+    b = DuckLakeBackend()
+    loc = _lake(tmp_path, "lake")
+    with pytest.raises(BackendError, match=hint):
+        b.fingerprint(loc, None)
+    with pytest.raises(BackendError, match=hint):
+        b.open(loc, None, read_only=True)

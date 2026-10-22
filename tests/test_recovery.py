@@ -844,7 +844,9 @@ def test_recover_groups_refs_by_dataset_and_says_what_to_run(
     again = _recovered(lost, tmp_path_factory)
     report = again.recover_report()
     assert report.steps[0].command == "tether commit -m 'Recover main'"
-    assert report.to_dict()["datasets"][0] == {
+    # By id: datasets are listed in id order, and `old` is random.
+    by_id = {d["dataset_id"]: d for d in report.to_dict()["datasets"]}
+    assert by_id[old] == {
         "dataset_id": old,
         "current": True,
         "pins": 2,

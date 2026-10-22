@@ -175,6 +175,19 @@ SQLite and MySQL catalogs have no such limit. Snapshots are catalog-wide,
 and `table` only scopes the handle. Put `CREATE SECRET` statements in
 `[backends.ducklake] init_sql` rather than credentials in the locator.
 
+### DuckLake and DuckDB versions
+
+A DuckDB-file metadata catalog that a newer DuckDB has written can be
+unreadable to an older one. DuckDB 2.0 creates catalog files in a storage
+format 1.x cannot read, and its `ducklake` extension moves a 1.x file onto
+that format at its first write, even while the catalog stays on the
+DuckLake 1.0 spec. The extension sets the storage version itself, so
+DuckDB's storage-compatibility settings do not prevent it. From then on
+tether, like every other reader on DuckDB 1.x, fails to attach the catalog,
+and its error says to upgrade `duckdb`. Upgrade readers, the environment
+tether runs in included, before writers. Postgres, SQLite and MySQL
+catalogs are not DuckDB files, and are unaffected.
+
 ### Dolt working sets
 
 Uncommitted changes on a branch are in no commit: a dirty branch is

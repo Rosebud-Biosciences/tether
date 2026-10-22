@@ -23,6 +23,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and one more the recorded commits `status` and `ops` check are still
   alive; each took two or three. `status` starts 8 processes instead of 12,
   about 45 ms less on a laptop.
+- A DuckLake catalog that a newer DuckDB has written fails to attach with a
+  hint to upgrade `duckdb`, and `open` now gives the same hints as every
+  other command. DuckDB 2.0 moves a DuckDB-file catalog onto a storage
+  format 1.x cannot read at its first write, even on the DuckLake 1.0 spec:
+  upgrade the `duckdb` tether runs with before, or with, any writer.
 
 ### Fixed
 
@@ -40,6 +45,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `snapshot`, `commit` and `pull` still refuse the change. The failure is
   cached like any other, so a later `status` without `--snapshot` keeps
   saying `error` until the object is re-registered.
+- `diff --content` and `log` name a DuckLake table by its full path,
+  double-quoting a part of it that is not a plain identifier, and `diff`
+  counts each table's rows. A table in a nested schema (a DuckLake 1.1
+  catalog, from DuckDB 2.0), `sales.europe.orders`, was named by its last
+  schema only, `europe.orders`, without counts, and listed a second time
+  when the range also created it. Tables whose names joined with dots to
+  the same string, such as `x."y.z"` and `"x.y".z`, were reported as one,
+  with one table's counts.
 
 ## [0.1.0b7] - 2026-10-09
 
