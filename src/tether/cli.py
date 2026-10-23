@@ -174,6 +174,7 @@ def _status_payload(report: StatusReport) -> dict:
             {"op": d.op.id, "commit": d.commit, "referenced": d.referenced}
             for d in report.vcs_drift
         ],
+        "unprotected": report.unprotected,
         "objects": [
             {
                 "key": o.key,
@@ -695,6 +696,15 @@ def status(
         )
     for drift in report.vcs_drift:
         typer.secho(f"  warning: {drift.message}", fg=typer.colors.YELLOW, err=True)
+    for key in report.unprotected:
+        typer.secho(
+            f"  warning: {key} has no pin and no branch until a writable open "
+            "forks it, so nothing of tether's keeps its recorded state: once "
+            "the store expires it, reading it here fails too. `tether new "
+            "--no-defer-record` forks it now",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
     for o in report.objects:
         v = f" verify={o.verify.status.value}" if o.verify else ""
         rec = "" if o.recoverable else " unrecoverable"
@@ -912,6 +922,15 @@ def new(
         help="Create every working branch now (--eager) or on the first writable "
         "open (--lazy). Default: [new] fork in tether.toml (lazy).",
     ),
+    defer_record: bool | None = typer.Option(
+        None,
+        "--defer-record/--no-defer-record",
+        help="Leave pin=record objects for the first writable open too. Until "
+        "then nothing of tether's holds their recorded state: once the store's "
+        "retention expires it, reading them here fails as well. For bookmarks "
+        "thrown away or merged sooner (a PR preview). Default: [new] record in "
+        "tether.toml (fork now).",
+    ),
     discard: bool = typer.Option(
         False,
         "--discard",
@@ -945,6 +964,7 @@ def new(
     `tether new -b NAME [REV]` creates bookmark NAME (at REV, default here) and
     forks a `tether.ws.<dataset>.NAME` branch per Forkable object off its
     pins -- lazily, on the first writable `open`, or now with `--eager`.
+    pin=record objects fork now regardless, unless `--defer-record`.
     `tether new NAME` joins an existing bookmark; `tether new main` (the
     trunk) writes straight to every object's upstream branch; `tether new REV`
     with no bookmark there is read-only. A bookmark another live checkout holds
@@ -968,6 +988,7 @@ def new(
                 eager=eager,
                 discard=discard,
                 adopt=adopt,
+                defer_record=defer_record,
             )
             if dry_run or plan_out is not None:
                 _save_plan(repo, plan, plan_out)
@@ -979,6 +1000,11 @@ def new(
     adopted = {
         a.key: a for a in plan.actions if a.op == "adopt" and a.params.get("adopted")
     }
+    unprotected: dict[str, str] = {
+        k: str(v)
+        for k, v in (plan.context.get("unprotected") or {}).items()
+        if k in repo.workspace.pending_forks
+    }
     if json_out:
         _emit(
             {
@@ -987,6 +1013,7 @@ def new(
                 "pending_forks": repo.workspace.pending_forks,
                 "fork_points": repo.workspace.fork_points,
                 "adopted": {k: a.target for k, a in sorted(adopted.items())},
+                "unprotected": unprotected,
             },
             as_json=True,
         )
@@ -1005,7 +1032,10 @@ def new(
         else:
             typer.echo(f"  {key} -> {ref}  (not at this revision; branch kept for gc)")
     for key, ref in sorted(repo.workspace.pending_forks.items()):
-        typer.echo(f"  {key} -> {ref}  (created on first writable open)")
+        unpinned = ", no pin" if key in unprotected else ""
+        typer.echo(f"  {key} -> {ref}  (created on first writable open{unpinned})")
+    for key, warning in sorted(unprotected.items()):
+        typer.secho(f"warning: {key}: {warning}", fg=typer.colors.YELLOW, err=True)
 
 
 @app.command(name="open")
