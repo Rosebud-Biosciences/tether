@@ -65,7 +65,7 @@ class ForkOps(RepoCore):
 
     # -- new (fork working refs) ----------------------------------------------- #
     def plan_new(
-        self,
+        self: Repo,
         rev: str | None = None,
         *,
         bookmark: str | None = None,
@@ -74,6 +74,7 @@ class ForkOps(RepoCore):
         eager: bool | None = None,
         discard: bool = False,
         adopt: bool = False,
+        defer_record: bool | None = None,
     ) -> Plan:
         """Compute what `new` would do without writing anywhere.
 
@@ -100,7 +101,12 @@ class ForkOps(RepoCore):
         whenever a write actually happens, and workspaces that never write
         leave nothing behind. A `pin = "record"` object forks immediately even
         in lazy mode: its recorded state has no native ref, so the branch
-        itself is what keeps the snapshot/version from expiring.
+        itself is what keeps the snapshot/version from expiring. With
+        `defer_record` it is deferred too, for bookmarks that are thrown away
+        or merged before the store's retention could expire that state (a
+        PR preview that writes a few of many stores): each such object gets a
+        plan note, also in `context["unprotected"]`, saying whether its
+        upstream branch still holds the state or only retention does.
 
         A working branch this workspace already has is *reset* by the fork
         (now, or when it is materialized). If its head holds writes that were
@@ -127,10 +133,24 @@ class ForkOps(RepoCore):
             eager: Fork every object during `new`; default from `config.new_fork`.
             discard: Reset working branches even if they hold unpinned writes.
             adopt: Take the bookmark's existing store branches as they are.
+            defer_record: Defer `pin = "record"` forks as well; default from
+                `config.new_record` (off when forks are eager).
 
         Raises:
-            ConfigError: `adopt` with `keep` or `discard`.
+            ConfigError: `adopt` with `keep` or `discard`; `defer_record`
+                with eager forks.
         """
+        if eager and defer_record:
+            raise ConfigError(
+                "--eager creates every branch now and --defer-record leaves "
+                "record objects for the first writable open; pick one"
+            )
+        if defer_record and eager is None and self.config.new_fork == "eager":
+            raise ConfigError(
+                "--defer-record leaves record objects for the first writable "
+                'open, but [new] fork = "eager" creates every branch now; pass '
+                "--lazy as well"
+            )
         if adopt and (keep or discard):
             raise ConfigError(
                 "--adopt takes the bookmark's branches as they are; "
@@ -142,6 +162,8 @@ class ForkOps(RepoCore):
             )
         objects = self._objects_at(self.vcs.resolve(rev)) if rev else self.objects
         eager = (self.config.new_fork == "eager") if eager is None else eager
+        if defer_record is None:
+            defer_record = self.config.new_record == "defer" and not eager
         known = self.vcs.bookmarks()
         create = False
         if bookmark is not None:
@@ -177,6 +199,7 @@ class ForkOps(RepoCore):
                 "shared": shared,
                 "keep": keep,
                 "eager": eager,
+                "defer_record": defer_record,
                 "discard": discard,
                 "manifest_hash": manifest_hash(objects),
                 "workspace_id": self.workspace.workspace_id,
@@ -417,7 +440,7 @@ class ForkOps(RepoCore):
                     continue
                 if unpinned:
                     detail += f", discarding its writes ({short_state(head)})"
-            if eager or not durable:
+            if eager or not (durable or defer_record):
                 if not durable and not eager:
                     detail += "; forked now so the state cannot expire"
                 plan.actions.append(
@@ -426,17 +449,48 @@ class ForkOps(RepoCore):
                     )
                 )
             else:
+                detail += "; created on first writable open"
+                if not durable:
+                    detail += ", nothing of tether's holds it until then"
+                    warning = self._unprotected_warning(key, m)
+                    plan.context.setdefault("unprotected", {})[key] = warning
+                    plan.notes.append(f"warning: {key}: {warning}")
                 plan.actions.append(
                     Action(
                         "defer-fork",
                         key,
                         m.kind,
                         target=name,
-                        detail=f"{detail}; created on first writable open",
+                        detail=detail,
                         params=params,
                     )
                 )
         return self._with_new_preconditions(plan, objects)
+
+    def _unprotected_warning(self: Repo, key: str, m: ObjectManifest) -> str:
+        """Why a deferred `pin = "record"` fork can fail: nothing of tether's
+        holds the recorded state, so what does -- its upstream branch while
+        the state is still that branch's head, else the store's retention."""
+        assert m.state is not None
+        backend = self.backend_for(m.kind)
+        state = short_state(m.state)
+        try:
+            head = backend.fingerprint(self._upstream_locator(m), None)
+        except TetherError as exc:
+            held = f"its upstream branch could not be read ({exc})"
+        else:
+            held = (
+                f"its upstream branch still sits at {state} and holds it until "
+                "it moves on; then only the store's retention does"
+                if self._same(m.kind, head, m.state)
+                else f"its upstream branch has moved on from {state}: only the "
+                "store's retention keeps it"
+            )
+        return (
+            f"no pin, and no branch until a writable open forks it; {held}. "
+            f"Once the store expires it, reading {key} on this bookmark fails "
+            "too. `tether new --no-defer-record` forks it now"
+        )
 
     def _plan_adopt(self, key: str, m: ObjectManifest, bookmark: str) -> Action | None:
         """What `new --adopt` does with `key`: this dataset's branch for
@@ -1134,6 +1188,7 @@ class ForkOps(RepoCore):
         eager: bool | None = None,
         discard: bool = False,
         adopt: bool = False,
+        defer_record: bool | None = None,
     ) -> None:
         """Start working on a bookmark: set up writable refs off its pins.
 
@@ -1142,9 +1197,9 @@ class ForkOps(RepoCore):
         other bookmark it is the store branch `working_ref_name(dataset_id,
         bookmark)`, forked from the pin -- by default *lazily*, on the first
         writable `open` (see `plan_new`), or during `new` with `eager`.
-        `pin = "record"` objects always fork now, from their recorded state.
-        Objects with no committed state yet are skipped. Forks run
-        concurrently. With no bookmark the working copy is read-only.
+        `pin = "record"` objects fork now, from their recorded state, unless
+        `defer_record`. Objects with no committed state yet are skipped. Forks
+        run concurrently. With no bookmark the working copy is read-only.
 
         Args:
             rev: Move the VCS working copy here first (`jj new`; in git, `switch`
@@ -1158,6 +1213,8 @@ class ForkOps(RepoCore):
                 `plan_new`); without it such a `new` is refused.
             adopt: Take the bookmark's existing store branches as they are,
                 whatever they hold (see `plan_new`).
+            defer_record: Defer `pin = "record"` forks to the first writable
+                `open` as well; default `config.new_record == "defer"`.
 
         Raises:
             TetherError: A working branch holds unpinned writes and `discard`
@@ -1176,6 +1233,7 @@ class ForkOps(RepoCore):
                     eager=eager,
                     discard=discard,
                     adopt=adopt,
+                    defer_record=defer_record,
                 ),
             )
 

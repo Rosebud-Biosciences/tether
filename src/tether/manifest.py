@@ -465,6 +465,11 @@ class RepoConfig:
     new_fork: str = "lazy"
     """`[new] fork`: `lazy` (default) creates a working branch on the first
     writable `open`; `eager` creates every branch during `new`."""
+    new_record: str = "fork"
+    """`[new] record`: `fork` (default) branches a `pin = "record"` object
+    during `new` even when forks are lazy, since that branch is all that keeps
+    its recorded state from expiring; `defer` leaves it for the first writable
+    `open` like a pinned one (`new --defer-record`). Needs `fork = "lazy"`."""
     defaults: Policy = field(default_factory=Policy)
     vcs: dict[str, Any] = field(default_factory=dict)
     backends: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -489,7 +494,10 @@ class RepoConfig:
             doc["dataset"] = {"id": self.dataset_id}
         doc["snapshot"] = {"auto": self.snapshot_auto}
         doc["verify"] = {"on_status": self.verify_on_status}
-        doc["new"] = {"fork": self.new_fork}
+        new_tbl: dict[str, str] = {"fork": self.new_fork}
+        if self.new_record != "fork":
+            new_tbl["record"] = self.new_record
+        doc["new"] = new_tbl
         doc["defaults"] = self.defaults.to_dict()
         if self.vcs:
             doc["vcs"] = _drop_nulls(self.vcs)
@@ -511,6 +519,15 @@ class RepoConfig:
         fork = str(new.get("fork", "lazy"))
         if fork not in ("lazy", "eager"):
             raise ConfigError(f"invalid [new] fork: {fork!r} (lazy or eager)")
+        record = str(new.get("record", "fork"))
+        if record not in ("fork", "defer"):
+            raise ConfigError(f"invalid [new] record: {record!r} (fork or defer)")
+        if record == "defer" and fork == "eager":
+            raise ConfigError(
+                '[new] record = "defer" leaves record objects for the first '
+                'writable open, but fork = "eager" creates every branch during '
+                '`new`; set fork = "lazy"'
+            )
         version = int(tether_tbl.get("version", 1))
         dataset_id = (data.get("dataset") or {}).get("id")
         if version >= 2 and not is_dataset_id(dataset_id):
@@ -527,6 +544,7 @@ class RepoConfig:
             snapshot_auto=bool(snapshot.get("auto", False)),
             verify_on_status=bool(verify.get("on_status", False)),
             new_fork=fork,
+            new_record=record,
             defaults=Policy.from_dict(data.get("defaults")),
             vcs=dict(data.get("vcs") or {}),
             backends=dict(data.get("backends") or {}),

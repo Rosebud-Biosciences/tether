@@ -707,6 +707,7 @@ class ObjectOps(RepoCore):
             trunk=self.on_trunk(),
             bookmark_drift=self.bookmark_drift(),
             vcs_drift=self.vcs_drift(),
+            unprotected=[k for k in self.unprotected_keys() if k in chosen],
             fresh=fresh,
             snapshot_at=self.workspace.last_snapshot_at,
         )

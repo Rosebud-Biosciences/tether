@@ -90,10 +90,21 @@ branches it created and names the object that failed. Run `new` again once
 the cause is gone; existing branches are reset onto the pin, never
 duplicated.
 
-**Pin-less objects are never deferred.** With `--pin record` there is no
-tag, only a snapshot id, version, commit or LSN the system will eventually
-expire. A branch on it is the only thing that stops that, so `new` forks
-such objects at once, even in lazy mode.
+**Pin-less objects are not deferred, unless you ask.** With `--pin record`
+there is no tag, only a snapshot id, version, commit or LSN the system will
+eventually expire. A branch on it is the only thing that stops that, so
+`new` forks such objects at once, even in lazy mode.
+
+`new --defer-record` (or `[new] record = "defer"`) defers them like the
+rest. That suits a bookmark that ends before the store could expire the
+state, such as a [PR preview](13-sharing-and-ci.qmd#a-pr-preview) that
+writes a few of many stores. Until a writable `open` forks it, nothing of
+tether's holds such an object's state. `new` warns per object, saying
+whether its upstream branch still sits at that state or only the store's
+retention keeps it, and `status` repeats the warning until the fork. Once
+the store expires the state, reading the object on that bookmark fails too,
+and so does the fork (`recorded state is gone`). `new --no-defer-record`
+forks them at once.
 
 A writable `open` never resets a branch on its own. It reuses one at the
 pin, or one a sibling object already writes through, and resets one only

@@ -163,3 +163,26 @@ it from a reviewed job with `--from-plan`), and `promote` without
 For a reproducible job, pin the read: `TETHER_REV=$(jj log -r main
 --no-graph -T commit_id)` (git: `git rev-parse main`) makes every
 `repo.open(key)` in the job read-only at that commit's pins.
+
+## A PR preview
+
+A preview environment per pull request works on a bookmark of its own and
+writes a few of the dataset's stores. With lazy forks, the default, a pinned
+store is branched only when the preview opens it writable. A
+`pin = "record"` store is branched at `new` regardless, since that branch is
+what keeps its recorded state from expiring. A preview that is dropped or
+merged long before the store's retention could expire that state can leave
+those stores unbranched too:
+
+```bash
+tether new -b "preview-$PR" --defer-record
+# ... the preview writes the stores it needs ...
+tether drop "preview-$PR" --no-dry-run    # when the pull request closes
+```
+
+The preview then needs write credentials only for the stores it writes,
+and one torn down without `drop` leaves no branch in the others. The price
+is that nothing of tether's holds the recorded state of a store not yet
+forked. `new` and `status` say so for each such store, and reading one
+fails once the store expires its state
+([Lazy or eager](04-branching-and-writing.qmd#lazy-or-eager)).

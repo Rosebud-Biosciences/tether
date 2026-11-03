@@ -139,7 +139,10 @@ With `pin = "record"` on any backend:
   but creates **no native ref**. The plan shows `record ... pin=record`.
 - `new` forks **straight from the recorded state**: the snapshot id in
   Icechunk and Iceberg, `(branch, version)` in Lance, the commit in Dolt and
-  git, and in Neon the LSN on the branch it was read from.
+  git, and in Neon the LSN on the branch it was read from. It does so at
+  once even when forks are lazy, since that branch is what keeps the state
+  alive, unless you pass `--defer-record`
+  ([Lazy or eager](04-branching-and-writing.qmd#lazy-or-eager)).
 - `verify` checks that the state is still reachable, and `open -r` works
   while it is.
 

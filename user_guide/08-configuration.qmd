@@ -68,6 +68,7 @@ on_status = false    # also run a cheap verify of each committed object in statu
 
 [new]
 fork = "lazy"        # "lazy": create a working branch on first writable open; "eager": during `new`
+record = "fork"      # pin=record objects: "fork" during `new` even when lazy; "defer": like the rest (needs fork = "lazy")
 
 [defaults]           # policy for objects added without an explicit one
 file = "immutable"   # immutable | versioned
